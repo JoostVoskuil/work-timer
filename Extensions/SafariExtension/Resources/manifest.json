@@ -1,0 +1,9 @@
+{
+  "manifest_version": 3,
+  "name": "WorkTimer Domain Reporter",
+  "version": "0.1.0",
+  "description": "Reports only the hostname of the active Safari tab to the WorkTimer app on this Mac.",
+  "permissions": ["tabs", "nativeMessaging", "alarms"],
+  "host_permissions": ["<all_urls>"],
+  "background": { "scripts": ["background.js"], "persistent": false }
+}

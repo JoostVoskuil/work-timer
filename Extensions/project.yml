@@ -1,0 +1,26 @@
+# XcodeGen spec (https://github.com/yonaskolb/XcodeGen). Requires full Xcode and an Apple Developer team.
+# Generates an Xcode project wrapping the SwiftPM core with the app, Safari extension and widget targets, all in one App Group.
+name: WorkTimer
+options: { deploymentTarget: { macOS: "13.0" } }
+packages:
+  WorkTimer: { path: .. }
+settings: { base: { DEVELOPMENT_TEAM: "YOUR_TEAM_ID" } }
+targets:
+  WorkTimer:
+    type: application
+    platform: macOS
+    sources: [../Sources/WorkTimerApp]
+    dependencies: [{ package: WorkTimer, product: WorkTimerCore }, { target: SafariExtension }, { target: Widgets }]
+    entitlements: { path: App.entitlements, properties: { com.apple.security.application-groups: [group.nl.worktimer.shared] } }
+  SafariExtension:
+    type: app-extension
+    platform: macOS
+    sources: [SafariExtension]
+    dependencies: [{ package: WorkTimer, product: WorkTimerCore }]
+    entitlements: { path: Safari.entitlements, properties: { com.apple.security.application-groups: [group.nl.worktimer.shared] } }
+  Widgets:
+    type: app-extension
+    platform: macOS
+    sources: [Widgets]
+    dependencies: [{ package: WorkTimer, product: WorkTimerCore }]
+    entitlements: { path: Widgets.entitlements, properties: { com.apple.security.application-groups: [group.nl.worktimer.shared] } }
