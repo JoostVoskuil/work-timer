@@ -36,7 +36,7 @@ struct WidgetView: View {
                 Spacer()
                 Label("Data unavailable", systemImage: "exclamationmark.triangle").font(.caption)
                 Text("Open WorkTimer").font(.caption2).foregroundStyle(.secondary)
-            }.frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .leading).padding()
+            }.frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .leading)
         case .ok(let s):
             let age = Date().timeIntervalSince1970 * 1000 - Double(s.generatedAt)
             VStack(alignment: .leading, spacing: 5) {
@@ -49,14 +49,21 @@ struct WidgetView: View {
                 Text(s.balanceLabel).font(.caption2).foregroundStyle(.secondary)
                 if s.pending > 0 { Text("\(hm(s.pending)) pending review").font(.caption2).foregroundStyle(.orange) }
                 if age > 30 * 60_000 || !s.health.isHealthy { Text("May be outdated · updated \(Date(timeIntervalSince1970: Double(s.generatedAt) / 1000).formatted(date: .omitted, time: .shortened))").font(.caption2).foregroundStyle(.red) }
-            }.padding().widgetURL(URL(string: "worktimer://today"))
+            }.widgetURL(URL(string: "worktimer://today"))
         }
     }
 }
 
 struct WorkTimerWidget: Widget {
     var body: some WidgetConfiguration {
-        StaticConfiguration(kind: "WorkTimerSummary", provider: Provider()) { WidgetView(entry: $0) }
+        StaticConfiguration(kind: "WorkTimerSummary", provider: Provider()) { entry in
+            if #available(macOS 14.0, *) {
+                WidgetView(entry: entry)
+                    .containerBackground(for: .widget) { Color(nsColor: .windowBackgroundColor) }
+            } else {
+                WidgetView(entry: entry).padding()
+            }
+        }
             .configurationDisplayName("Work hours")
             .description("Today, week and balance.")
             .supportedFamilies([.systemSmall, .systemMedium])
