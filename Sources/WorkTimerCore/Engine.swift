@@ -132,6 +132,7 @@ public final class TrackingEngine {
                     try ledger.append(ActivityInterval(span: Span(s, observed), category: cat, reason: reason, app: st.app, domain: st.domain, source: "recovered"))
                 }
             }
+            try ledger.closeInterruptedOutsideReviews(observed: observed)
             if now > observed {
                 try appendGap(Span(observed, now), reason: .appNotRunning)
             }

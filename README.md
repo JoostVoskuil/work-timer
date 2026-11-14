@@ -31,6 +31,7 @@ Corrections are an overlay (`manual_adjustments`); captured evidence is never re
 ## Review
 Review explains uncertain periods: no keyboard/mouse input (possibly a call), tracking gaps, and unanswered outside-hours activity. Each item shows dates, duration, why confirmation is needed, and classification actions. These periods are excluded from work until confirmed. Leaving an item unanswered keeps it pending. Active after-hours sessions can be answered directly in Review; Work or Private also applies to the remainder of that session.
 Recorded apps and website domains are shown as context, not proof of work. Idle periods retain foreground app identifiers going forward; older entries and tracking gaps may have no context. Task and document titles are not captured.
+On restart, unfinished after-hours reviews from previous sessions are closed at their last recorded evidence, not extended to the present. They remain pending for your answer.
 
 ## Xcode extensions
 `Extensions/` holds the Safari Web Extension (hostname only), its native handler, the WidgetKit widget and an XcodeGen `project.yml`. The SwiftPM-built app does not contain these extensions; use the XcodeGen watcher above for the full app. Widgets require the extension to be installed and added in Notification Center.

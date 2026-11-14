@@ -238,6 +238,39 @@ private final class Rig {
         #expect(!gaps.isEmpty)
         #expect(calc.day(fri, now: at(2025, 6, 13, 11)).work <= 31 * Duration.minute)
     }
+
+    @Test func restartingClosesOldLiveReviewsAtLastObservation() throws {
+        let r = try Rig()
+        let start = at(2025, 6, 13, 18)
+        let observed = at(2025, 6, 13, 18, 10)
+        let restarted = at(2025, 6, 13, 19)
+        try r.send(.launch(app: "a", idleSeconds: 0), start)
+        try r.send(.tick, observed)
+        let engine = TrackingEngine(ledger: r.ledger)
+        try engine.recover(now: restarted)
+        let oldReview = try #require(r.ledger.reviews(status: .pending).first)
+        #expect(oldReview.start == start)
+        #expect(oldReview.end == observed)
+        _ = try engine.handle(.launch(app: "a", idleSeconds: 0), at: Stamp(wall: restarted, mono: Double(restarted) / 1000))
+        let reviews = r.ledger.reviews(status: .pending).filter { $0.type == .outsideHours }
+        #expect(reviews.filter { $0.end == nil }.count == 1)
+        #expect(reviews.last?.start == restarted)
+    }
+
+    @Test func repairingHistoricalUnfinishedReviewsUsesOnlyTheirOwnEvidence() throws {
+        let r = try Rig()
+        let first = at(2025, 6, 13, 18)
+        let second = at(2025, 6, 13, 19)
+        for start in [first, second] {
+            _ = try r.ledger.addReview(ReviewItem(type: .outsideHours, start: start, createdAt: start, dedupeKey: "outside:\(start)"))
+            _ = try r.ledger.append(ActivityInterval(span: Span(start, start + 10 * Duration.minute), category: .privateTime, reason: .outsideHours))
+        }
+        try r.ledger.closeInterruptedOutsideReviews(observed: second + 20 * Duration.minute)
+        let reviews = r.ledger.reviews(status: .pending)
+        #expect(reviews.map(\.end) == [first + 10 * Duration.minute, second + 10 * Duration.minute])
+        try r.ledger.closeInterruptedOutsideReviews(observed: second + Duration.hour)
+        #expect(r.ledger.reviews(status: .pending) == reviews)
+    }
 }
 
 @Suite struct AccountingTests {

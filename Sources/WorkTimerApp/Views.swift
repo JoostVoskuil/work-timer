@@ -349,7 +349,7 @@ struct ReviewView: View {
                         context(r)
                         Text(explanation(r)).font(.callout).fixedSize(horizontal: false, vertical: true)
                         HStack {
-                            Button("Count as work") { model.resolve(r, as: .work) }
+                            Button("Work") { model.resolve(r, as: .work) }
                                 .disabled(r.end == nil && !model.canAnswerLiveReview(r))
                             Button("Break") { model.resolve(r, as: .breakTime) }.disabled(r.end == nil)
                             Button("Private") { model.resolve(r, as: .privateTime) }

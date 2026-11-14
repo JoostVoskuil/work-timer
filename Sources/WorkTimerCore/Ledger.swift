@@ -242,6 +242,24 @@ public final class Ledger {
         try db.exec("UPDATE review_items SET end_ms = ? WHERE id = ?", [.int(end), .int(id)])
     }
 
+    /// A process restart ends every previous live session, even if it never wrote an end event.
+    public func closeInterruptedOutsideReviews(observed: Millis) throws {
+        let unfinished = try db.query(
+            "SELECT id,start_ms FROM review_items WHERE type='outsideHours' AND status='pending' AND end_ms IS NULL ORDER BY start_ms"
+        ) { ($0.int(0), $0.int(1)) }
+        for (id, start) in unfinished {
+            let nextStart = try db.scalar(
+                "SELECT MIN(start_ms) FROM review_items WHERE type='outsideHours' AND start_ms>?", [.int(start)]
+            ) ?? observed
+            let limit = min(observed, nextStart)
+            let lastEvidence = try db.scalar(
+                "SELECT MAX(MIN(end_ms,?)) FROM activity_intervals WHERE reason=? AND start_ms>=? AND start_ms<?",
+                [.int(limit), .text(Reason.outsideHours.rawValue), .int(start), .int(limit)]
+            )
+            try setReviewEnd(id: id, end: max(start + 1, lastEvidence ?? start + 1))
+        }
+    }
+
     public func resolveReview(id: Int64, resolution: String, at: Millis) throws {
         try db.exec("UPDATE review_items SET status='resolved', resolved_ms=?, resolution=? WHERE id=?", [.int(at), .text(resolution), .int(id)])
     }
