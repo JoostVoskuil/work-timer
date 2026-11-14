@@ -73,8 +73,10 @@ public struct DaySummary: Equatable {
     public var pending: Millis
     public var targetMillis: Millis
     public var isToday: Bool
-    public init(date: LocalDate, byCategory: [Category: Millis], pending: Millis, targetMillis: Millis, isToday: Bool) {
+    public var personal: Millis
+    public init(date: LocalDate, byCategory: [Category: Millis], pending: Millis, targetMillis: Millis, isToday: Bool, personal: Millis? = nil) {
         self.date = date; self.byCategory = byCategory; self.pending = pending; self.targetMillis = targetMillis; self.isToday = isToday
+        self.personal = personal ?? byCategory[.privateTime, default: 0]
     }
     public var work: Millis { byCategory[.work] ?? 0 }
     public var balance: Millis { work - targetMillis }
@@ -127,7 +129,27 @@ public struct ReportCalculator {
     public func segments(in span: Span) -> [Segment] {
         let intervals = (try? ledger.intervals(in: span)) ?? []
         let adjustments = (try? ledger.adjustments(in: span)) ?? []
-        return Timeline.effective(intervals: intervals, live: live(), adjustments: adjustments, in: span)
+        let pendingReviews = ledger.reviews(status: .pending)
+        return Timeline.effective(intervals: intervals, live: live(), adjustments: adjustments, in: span).flatMap { segment -> [Segment] in
+            guard segment.pending else { return [segment] }
+            let reviewSpans = pendingReviews.compactMap { review -> Span? in
+                let matches: Bool
+                switch review.type {
+                case .outsideHours: matches = segment.reason == .outsideHours
+                case .idle: matches = segment.reason == .idleTimeout
+                case .gap: matches = segment.category == .gap
+                }
+                guard matches else { return nil }
+                return segment.span.intersection(Span(review.start, review.end ?? segment.span.end))
+            }
+            let boundaries = Array(Set([segment.span.start, segment.span.end] + reviewSpans.flatMap { [$0.start, $0.end] })).sorted()
+            return zip(boundaries, boundaries.dropFirst()).map { start, end in
+                var slice = segment
+                slice.span = Span(start, end)
+                slice.pending = reviewSpans.contains { $0.start <= start && end <= $0.end }
+                return slice
+            }
+        }
     }
 
     public func day(_ d: LocalDate, now: Millis) -> DaySummary {
@@ -141,7 +163,8 @@ public struct ReportCalculator {
             by[s.category, default: 0] += s.span.length
             if s.pending && s.category != .work { pending += s.span.length }
         }
-        return DaySummary(date: d, byCategory: by, pending: pending, targetMillis: schedule.targetMillis(d), isToday: schedule.localDate(now) == d)
+        let personal = segs.filter { $0.category == .privateTime && $0.reason != .outsideHours }.reduce(Millis(0)) { $0 + $1.span.length }
+        return DaySummary(date: d, byCategory: by, pending: pending, targetMillis: schedule.targetMillis(d), isToday: schedule.localDate(now) == d, personal: personal)
     }
 
     public func days(_ range: ClosedRange<LocalDate>, now: Millis) -> [DaySummary] {

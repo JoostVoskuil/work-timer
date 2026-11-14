@@ -286,8 +286,15 @@ struct ReportsView: View {
     private func chart(_ days: [DaySummary]) -> some View {
         Chart(days, id: \.date) { d in
             BarMark(x: .value("Day", d.date.description), y: .value("Hours", Double(d.work) / Double(Duration.hour)))
+                .foregroundStyle(by: .value("Activity", "Work"))
+            BarMark(x: .value("Day", d.date.description), y: .value("Hours", Double(d.personal) / Double(Duration.hour)))
+                .foregroundStyle(by: .value("Activity", "Personal"))
             RuleMark(y: .value("Target", Double(d.targetMillis) / Double(Duration.hour))).foregroundStyle(.secondary)
-        }.foregroundStyle(WorkStyle.accent).frame(height: 200)
+        }
+        .chartForegroundStyleScale(domain: ["Work", "Personal"], range: [WorkStyle.accent, Color.purple])
+        .chartLegend(position: .bottom)
+        .chartYAxisLabel("Hours")
+        .frame(height: 220)
     }
 
     private func attribution(_ calc: ReportCalculator, _ span: Span) -> some View {

@@ -274,6 +274,52 @@ private final class Rig {
 }
 
 @Suite struct AccountingTests {
+    @Test func personalTimeExcludesUnansweredAfterHoursAndRemainsSeparateFromWork() throws {
+        let r = try Rig()
+        let start = at(2025, 6, 13, 18)
+        _ = try r.ledger.append(ActivityInterval(span: Span(start, start + Duration.hour), category: .privateTime, reason: .privateRule))
+        _ = try r.ledger.append(ActivityInterval(span: Span(start + Duration.hour, start + 2 * Duration.hour), category: .privateTime, reason: .outsideHours))
+        let id = try r.ledger.addReview(ReviewItem(type: .outsideHours, start: start + Duration.hour,
+                                                 end: start + 2 * Duration.hour, createdAt: start, dedupeKey: "personal-pending"))
+        let now = start + 2 * Duration.hour
+        let day = LocalDate(2025, 6, 13)
+        #expect(r.calc(now: now).day(day, now: now).personal == Duration.hour)
+        #expect(r.calc(now: now).day(day, now: now).work == 0)
+        let review = try #require(r.ledger.reviews(status: .pending).first { $0.id == id })
+        try ReviewResolver(ledger: r.ledger).resolve(review, as: .privateTime, now: now)
+        let summary = r.calc(now: now).day(day, now: now)
+        #expect(summary.personal == 2 * Duration.hour)
+        #expect(summary.pending == 0)
+        #expect(summary.work == 0)
+    }
+
+    @Test func unknownTimeWithoutReviewIsNotReportedAsPending() throws {
+        let r = try Rig()
+        let span = Span(at(2025, 6, 13, 10), at(2025, 6, 13, 11))
+        _ = try r.ledger.append(ActivityInterval(span: span, category: .gap, reason: .browserUnknown))
+        let summary = r.calc(now: span.end).day(LocalDate(2025, 6, 13), now: span.end)
+        #expect(r.ledger.reviews(status: .pending).isEmpty)
+        #expect(summary.pending == 0)
+        #expect(summary.work == 0)
+        #expect(summary.byCategory[.gap] == Duration.hour)
+    }
+
+    @Test func pendingTotalsAreClippedToUnansweredReviewRange() throws {
+        let r = try Rig()
+        let start = at(2025, 6, 13, 10)
+        let end = start + Duration.hour
+        _ = try r.ledger.append(ActivityInterval(span: Span(start, end), category: .gap, reason: .appNotRunning))
+        let id = try r.ledger.addReview(ReviewItem(type: .gap, start: start + 10 * Duration.minute,
+                                                 end: start + 30 * Duration.minute, createdAt: end, dedupeKey: "pending-gap"))
+        let calc = r.calc(now: end)
+        #expect(calc.day(LocalDate(2025, 6, 13), now: end).pending == 20 * Duration.minute)
+        #expect(calc.week(containing: LocalDate(2025, 6, 13), now: end).pending == 20 * Duration.minute)
+        try r.ledger.resolveReview(id: id, resolution: "answered", at: end)
+        #expect(calc.day(LocalDate(2025, 6, 13), now: end).pending == 0)
+        #expect(calc.week(containing: LocalDate(2025, 6, 13), now: end).pending == 0)
+        #expect(calc.day(LocalDate(2025, 6, 13), now: end).work == 0)
+    }
+
     @Test func reviewingIdleAsWorkIncludesPhoneCallWithoutRewritingEvidence() throws {
         let r = try Rig()
         let start = at(2025, 6, 13, 10)

@@ -21,6 +21,8 @@ Requires macOS 27 or later and Xcode with the macOS 27 SDK to build.
 - Sleep and screen-locked intervals are recorded only within the configured work window. They remain away time, available for manual correction if you were working (for example, on a phone call); outside that window they are omitted.
 - Week-to-date balance = work Monday..selected day minus scheduled targets for those days (today's full target counts and is labelled "incomplete").
 - One calculator (`ReportCalculator`) feeds the menu bar, reports, widget snapshot and CSV.
+- Pending review totals include only time covered by actual unanswered Review items, not every unknown recording reason. Unknown time without a Review item remains excluded from work.
+- Report charts stack work (teal) and personal time (purple) with a legend. Personal time includes private rules, private browsing and confirmed private activity; unanswered after-hours activity is excluded until classified. Personal time never contributes to work balances.
 
 ## Rule precedence
 Private beats work on ties; domain rules beat app rules. Default private: nu.nl, nos.nl, tweakers.net, VLC. Hostname matching is exact or `.`-suffix (so `menu.nl` does not match `nu.nl`).
