@@ -27,6 +27,7 @@ Corrections are an overlay (`manual_adjustments`); captured evidence is never re
 
 ## Xcode extensions
 `Extensions/` holds the Safari Web Extension (hostname only), its native handler, the WidgetKit widget and an XcodeGen `project.yml`. The SwiftPM-built app does not contain these extensions; use the XcodeGen watcher above for the full app. Widgets require the extension to be installed and added in Notification Center.
+Both extensions enable App Sandbox, which macOS requires for PlugInKit discovery. The installer verifies that the installed widget appears in PlugInKit, rather than treating a successful registration command as proof of discovery. For desktop placement, right-click the desktop, choose **Edit Widgets**, and search for **WorkTimer**.
 
 ## Not measured
 CPU, memory and energy targets, 8-hour soak, DST on a real clock, real sleep/lock, Safari behaviour and widget refresh budgets need manual validation (plan section 10, milestones A and H).

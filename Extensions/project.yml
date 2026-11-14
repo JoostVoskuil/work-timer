@@ -29,7 +29,7 @@ targets:
         NSExtension:
           NSExtensionPointIdentifier: com.apple.Safari.web-extension
           NSExtensionPrincipalClass: $(PRODUCT_MODULE_NAME).SafariWebExtensionHandler
-    entitlements: { path: Safari.entitlements, properties: { com.apple.security.application-groups: [group.nl.worktimer.shared] } }
+    entitlements: { path: Safari.entitlements, properties: { com.apple.security.app-sandbox: true, com.apple.security.application-groups: [group.nl.worktimer.shared] } }
   Widgets:
     type: app-extension
     platform: macOS
@@ -42,4 +42,4 @@ targets:
         CFBundleDisplayName: WorkTimer Widgets
         NSExtension:
           NSExtensionPointIdentifier: com.apple.widgetkit-extension
-    entitlements: { path: Widgets.entitlements, properties: { com.apple.security.application-groups: [group.nl.worktimer.shared] } }
+    entitlements: { path: Widgets.entitlements, properties: { com.apple.security.app-sandbox: true, com.apple.security.application-groups: [group.nl.worktimer.shared] } }

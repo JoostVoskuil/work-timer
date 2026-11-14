@@ -106,7 +106,13 @@ build_install_launch() {
   /System/Library/Frameworks/CoreServices.framework/Frameworks/LaunchServices.framework/Support/lsregister \
     -f "$INSTALL_APP" || return $?
   /usr/bin/pluginkit -a "$INSTALL_APP/Contents/PlugIns/Widgets.appex" || return $?
-  log "Refreshed Launch Services and registered the widget extension"
+  local registered
+  registered="$(/usr/bin/pluginkit -m -A -D -v -i nl.worktimer.app.widgets)" || return $?
+  if ! printf '%s\n' "$registered" | grep -Fq "$INSTALL_APP/Contents/PlugIns/Widgets.appex"; then
+    echo "macOS did not discover the installed widget extension. Check PlugInKit logs for rejection details." >&2
+    return 1
+  fi
+  log "Verified macOS discovery of the installed widget extension"
   open -n "$INSTALL_APP" || return $?
   log "Started WorkTimer. Add its widget from Notification Center's Edit Widgets screen."
 }
