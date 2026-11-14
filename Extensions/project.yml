@@ -4,7 +4,7 @@ name: WorkTimer
 options: { deploymentTarget: { macOS: "27.0" } }
 packages:
   WorkTimer: { path: .. }
-settings: { base: { SWIFT_VERSION: "6.0", MARKETING_VERSION: "1.0", CURRENT_PROJECT_VERSION: "1" } }
+settings: { base: { SWIFT_VERSION: "6.0", MARKETING_VERSION: "1.0", CURRENT_PROJECT_VERSION: "1", WORKTIMER_APP_GROUP: "$(DEVELOPMENT_TEAM).nl.worktimer.shared" } }
 targets:
   WorkTimer:
     type: application
@@ -14,8 +14,8 @@ targets:
     settings: { base: { PRODUCT_BUNDLE_IDENTIFIER: nl.worktimer.app } }
     info:
       path: App-Info.plist
-      properties: { LSUIElement: true, CFBundleDisplayName: WorkTimer, CFBundleIconFile: WorkTimer }
-    entitlements: { path: App.entitlements, properties: { com.apple.security.application-groups: [group.nl.worktimer.shared] } }
+      properties: { LSUIElement: true, CFBundleDisplayName: WorkTimer, CFBundleIconFile: WorkTimer, WorkTimerAppGroup: "$(WORKTIMER_APP_GROUP)" }
+    entitlements: { path: App.entitlements, properties: { com.apple.security.application-groups: ["$(WORKTIMER_APP_GROUP)"] } }
   SafariExtension:
     type: app-extension
     platform: macOS
@@ -26,10 +26,11 @@ targets:
       path: Safari-Info.plist
       properties:
         CFBundleDisplayName: WorkTimer Safari
+        WorkTimerAppGroup: $(WORKTIMER_APP_GROUP)
         NSExtension:
           NSExtensionPointIdentifier: com.apple.Safari.web-extension
           NSExtensionPrincipalClass: $(PRODUCT_MODULE_NAME).SafariWebExtensionHandler
-    entitlements: { path: Safari.entitlements, properties: { com.apple.security.app-sandbox: true, com.apple.security.application-groups: [group.nl.worktimer.shared] } }
+    entitlements: { path: Safari.entitlements, properties: { com.apple.security.app-sandbox: true, com.apple.security.application-groups: ["$(WORKTIMER_APP_GROUP)"] } }
   Widgets:
     type: app-extension
     platform: macOS
@@ -40,6 +41,7 @@ targets:
       path: Widgets-Info.plist
       properties:
         CFBundleDisplayName: WorkTimer Widgets
+        WorkTimerAppGroup: $(WORKTIMER_APP_GROUP)
         NSExtension:
           NSExtensionPointIdentifier: com.apple.widgetkit-extension
-    entitlements: { path: Widgets.entitlements, properties: { com.apple.security.app-sandbox: true, com.apple.security.application-groups: [group.nl.worktimer.shared] } }
+    entitlements: { path: Widgets.entitlements, properties: { com.apple.security.app-sandbox: true, com.apple.security.application-groups: ["$(WORKTIMER_APP_GROUP)"] } }

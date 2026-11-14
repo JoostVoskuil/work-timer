@@ -40,13 +40,20 @@ public enum SnapshotLoad: Equatable {
 }
 
 public struct SnapshotStore {
-    public static let appGroupIdentifier = "group.nl.worktimer.shared"
-
-    public static func sharedContainer() throws -> SnapshotStore {
+    public static func sharedDirectory() throws -> URL {
+        guard let appGroupIdentifier = Bundle.main.object(forInfoDictionaryKey: "WorkTimerAppGroup") as? String,
+              !appGroupIdentifier.hasPrefix("."), !appGroupIdentifier.contains("$"),
+              appGroupIdentifier.hasSuffix(".nl.worktimer.shared") else {
+            throw SharedSnapshotError.containerUnavailable
+        }
         guard let directory = FileManager.default.containerURL(forSecurityApplicationGroupIdentifier: appGroupIdentifier) else {
             throw SharedSnapshotError.containerUnavailable
         }
-        return SnapshotStore(directory: directory)
+        return directory
+    }
+
+    public static func sharedContainer() throws -> SnapshotStore {
+        SnapshotStore(directory: try sharedDirectory())
     }
 
     public let url: URL

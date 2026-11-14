@@ -6,6 +6,7 @@ import SwiftUI
 import UserNotifications
 import WidgetKit
 import WorkTimerCore
+import OSLog
 
 private final class NotificationHandler: NSObject, UNUserNotificationCenterDelegate {
     nonisolated func userNotificationCenter(_ center: UNUserNotificationCenter,
@@ -60,6 +61,7 @@ final class AppModel: ObservableObject {
     private var lastSnapshot: Millis = 0
     private var lastWidgetReload: Millis?
     private var widgetPublishError: String?
+    private let widgetLogger = Logger(subsystem: "nl.worktimer.app", category: "WidgetPublishing")
     private var lastBreakActive = false
     private var lastOutsidePrompt = false
     private var didPromptNotificationSettings = false
@@ -89,7 +91,12 @@ final class AppModel: ObservableObject {
             self.pomo = pomo
             alerts = WorkAlerts(ledger: ledger)
             snapshots = SnapshotStore(directory: loc.directory)
-            inbox = try? BrowserInbox(path: loc.directory.appendingPathComponent("browser-inbox.sqlite").path)
+            do {
+                inbox = try BrowserInbox(path: SnapshotStore.sharedDirectory().appendingPathComponent("browser-inbox.sqlite").path)
+            } catch {
+                health.safariOK = false
+                health.messages.append("Could not open shared Safari inbox: \(error.localizedDescription)")
+            }
 
             let steps = AppUpdateSteps(model: self)
             let version = Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "dev"
@@ -197,7 +204,7 @@ final class AppModel: ObservableObject {
             if let widgetPublishError { health.messages.removeAll { $0 == widgetPublishError } }
             widgetPublishError = nil
             if lastWidgetReload == nil || now - (lastWidgetReload ?? now) >= 15 * Duration.minute {
-                NSLog("WorkTimer published shared widget snapshot; requesting timeline reload")
+                widgetLogger.notice("Shared widget snapshot published; requesting timeline reload")
                 WidgetCenter.shared.reloadTimelines(ofKind: "WorkTimerSummary")
                 lastWidgetReload = now
             }
@@ -206,7 +213,7 @@ final class AppModel: ObservableObject {
             if let widgetPublishError { health.messages.removeAll { $0 == widgetPublishError } }
             widgetPublishError = message
             health.messages.append(message)
-            NSLog("%@", message)
+            widgetLogger.error("Widget snapshot publication failed: \(error.localizedDescription, privacy: .public)")
         }
     }
 
