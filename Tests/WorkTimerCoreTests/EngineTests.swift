@@ -122,6 +122,19 @@ private final class Rig {
         #expect(r.total(.work, fri, now: now) == 0)
     }
 
+    @Test func idleReviewRetainsForegroundAppContext() throws {
+        let r = try Rig()
+        let start = at(2025, 6, 13, 10)
+        try r.send(.launch(app: "com.apple.Xcode", idleSeconds: 0), start)
+        try r.send(.idleSample(seconds: 600), start + 10 * Duration.minute)
+        try r.send(.idleSample(seconds: 0), start + 20 * Duration.minute)
+        let review = try #require(r.ledger.reviews(status: .pending).first { $0.type == .idle })
+        let end = try #require(review.end)
+        let segments = r.calc(now: end).segments(in: Span(review.start, end))
+        #expect(!segments.isEmpty)
+        #expect(segments.allSatisfy { $0.app == "com.apple.Xcode" && $0.category == .idle })
+    }
+
     @Test func idleReturnKeepsIdlePeriodAndResumesWork() throws {
         let r = try Rig()
         let t0 = at(2025, 6, 13, 10)

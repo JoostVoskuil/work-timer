@@ -324,7 +324,7 @@ public final class TrackingEngine {
         if inactive { return ex(.away, .sessionInactive) }
         if paused { return ex(.away, .paused) }
         if breakActive { return ex(.breakTime, .pomodoroBreak) }
-        if userIdle { return ex(.idle, .idleTimeout) }
+        if userIdle { return ex(.idle, .idleTimeout, app: app) }
         guard let appID = app else { return ex(.gap, .suspension) }
         var domain: String?
         if appID == safariBundleID {

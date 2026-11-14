@@ -346,6 +346,7 @@ struct ReviewView: View {
                                 .font(.callout).monospacedDigit().foregroundStyle(.secondary)
                         }
                         Text(period(r)).font(.caption).foregroundStyle(.secondary)
+                        context(r)
                         Text(explanation(r)).font(.callout).fixedSize(horizontal: false, vertical: true)
                         HStack {
                             Button("Count as work") { model.resolve(r, as: .work) }
@@ -367,6 +368,33 @@ struct ReviewView: View {
                 }.listStyle(.inset)
             }
         }
+    }
+
+    @ViewBuilder private func context(_ review: ReviewItem) -> some View {
+        let end = review.end ?? model.now
+        let segments = end > review.start ? model.calculator?.segments(in: Span(review.start, end)) ?? [] : []
+        let apps = Array(Set(segments.compactMap(\.app))).sorted()
+        let domains = Array(Set(segments.compactMap(\.domain))).sorted()
+        VStack(alignment: .leading, spacing: 5) {
+            if apps.isEmpty {
+                Label("No app context recorded for this period", systemImage: "app.dashed")
+                    .foregroundStyle(.secondary)
+            } else {
+                Label {
+                    Text("\(review.type == .idle ? "Foreground app (not proof of work)" : "Recorded apps"): \(apps.map(appName).joined(separator: ", "))")
+                } icon: { Image(systemName: "app") }
+            }
+            if !domains.isEmpty {
+                Label(domains.joined(separator: ", "), systemImage: "globe")
+            }
+        }
+        .font(.callout)
+        .fixedSize(horizontal: false, vertical: true)
+    }
+
+    private func appName(_ bundleID: String) -> String {
+        guard let url = NSWorkspace.shared.urlForApplication(withBundleIdentifier: bundleID) else { return bundleID }
+        return FileManager.default.displayName(atPath: url.path)
     }
 
     private func title(_ review: ReviewItem) -> String {
