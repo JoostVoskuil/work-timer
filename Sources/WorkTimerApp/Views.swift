@@ -28,6 +28,7 @@ func timeText(_ t: Millis) -> String {
 private func color(_ c: WorkTimerCore.Category) -> Color {
     switch c {
     case .work: return .green
+    case .learn: return .blue
     case .privateTime: return .purple
     case .breakTime: return .orange
     case .idle: return .gray
@@ -68,6 +69,7 @@ struct MenuBarLabel: View {
     var body: some View {
         if model.paused { Label("Paused", systemImage: "pause.circle") }
         else if !model.health.storageOK { Label("Storage error", systemImage: "exclamationmark.triangle") }
+        else if model.status?.category == .learn { Label("Learn \(hm(model.today.learn))", systemImage: "book") }
         else { Label(hm(model.today.work), systemImage: "clock.badge.checkmark") }
     }
 }
@@ -109,6 +111,8 @@ struct MenuContent: View {
                     Text(hm(w.toDateBalance, signed: true))
                 }.font(.caption).foregroundStyle(.secondary)
                 if w.currentDayIncomplete { Text("Today’s target is included in balance.").font(.caption2).foregroundStyle(.secondary) }
+                Text("Work + Learn \(hm(w.workAndLearn)) / \(hm(w.weeklyCeiling)) this week")
+                    .font(.caption).foregroundStyle(w.ceilingReached ? Color.red : Color.secondary)
             }
             if let s = model.status {
                 Label("\(s.category.title): \(s.reason.explanation)", systemImage: "circle.fill").foregroundStyle(color(s.category)).font(.caption)
@@ -116,6 +120,7 @@ struct MenuContent: View {
                     Text("Outside work hours. Is this work?").font(.caption)
                     HStack {
                         Button("Work") { model.answerOutside(.work) }
+                        Button("Learn") { model.answerOutside(.learn) }
                         Button("Private") { model.answerOutside(.private) }
                         Button("Later") { model.answerOutside(.later) }
                     }
@@ -128,6 +133,9 @@ struct MenuContent: View {
                 Text("Pomodoro \(model.pomodoro.phase.rawValue): \(hm(model.pomodoroRemaining))").font(.caption)
             }
             Divider()
+            Button { model.toggleLearning() } label: {
+                Label(model.learning ? "End learning session" : "Start learning session", systemImage: "book")
+            }
             Button { openWindow(id: "main"); NSApp.activate(ignoringOtherApps: true) } label: {
                 Label("Open WorkTimer", systemImage: "macwindow")
             }.buttonStyle(.borderedProminent).tint(WorkStyle.accent).frame(maxWidth: .infinity, alignment: .leading)
@@ -170,6 +178,7 @@ struct TodayView: View {
             SectionHeading(title: "Today", subtitle: Date().formatted(date: .complete, time: .omitted), symbol: "sun.max")
             HStack(spacing: 0) {
                 stat("Work", hm(model.today.work))
+                stat("Learn", hm(model.today.learn))
                 stat("Target", hm(model.today.targetMillis))
                 stat("Balance", hm(model.today.balance, signed: true) + (model.today.isToday ? " (incomplete)" : ""))
                 stat("Pending", hm(model.today.pending))
@@ -194,7 +203,7 @@ struct TodayView: View {
                     Text(s.explanation).font(.caption).foregroundStyle(.secondary).lineLimit(2)
                     if s.pending { Text("pending").font(.caption).foregroundStyle(.orange) }
                     Menu("Change") {
-                        ForEach([WorkTimerCore.Category.work, .privateTime, .breakTime], id: \.self) { c in
+                        ForEach([WorkTimerCore.Category.work, .learn, .privateTime, .breakTime], id: \.self) { c in
                             Button("Mark as \(c.title)") { model.reclassify(s.span, as: c, note: "Manual change") }
                         }
                         if case .correction(let id) = s.source { Button("Undo correction") { model.undo(id) } }
@@ -271,6 +280,8 @@ struct ReportsView: View {
     @ViewBuilder private func weekView(_ calc: ReportCalculator, _ d: LocalDate) -> some View {
         let w = calc.week(containing: d, now: model.now)
         Text("Work \(hm(w.work)) · full-week target \(hm(w.fullWeekTarget)) · to-date balance \(hm(w.toDateBalance, signed: true))\(w.currentDayIncomplete ? " (today incomplete)" : "") · ceiling \(hm(w.weeklyCeiling))")
+        Text("Learn \(hm(w.learn)) · Work + Learn \(hm(w.workAndLearn)) / \(hm(w.weeklyCeiling)) · \(w.ceilingReached ? "Weekly limit reached" : "\(hm(w.remainingBeforeCeiling)) remaining")")
+            .font(.callout).foregroundStyle(w.ceilingReached ? Color.red : Color.secondary)
         if w.pending > 0 { Text("Includes \(hm(w.pending)) pending review, not counted as work.").font(.caption).foregroundStyle(.orange) }
         chart(w.days)
         attribution(calc, Span(calc.schedule.startOfDay(w.weekStart), calc.schedule.startOfDay(calc.schedule.addDays(w.weekStart, 7))))
@@ -278,7 +289,7 @@ struct ReportsView: View {
 
     @ViewBuilder private func monthView(_ calc: ReportCalculator, _ d: LocalDate) -> some View {
         let m = calc.month(containing: d, now: model.now)
-        Text("Work \(hm(m.work)) · target \(hm(m.target)) · balance \(hm(m.balance, signed: true))")
+        Text("Work \(hm(m.work)) · Learn \(hm(m.learn)) · target \(hm(m.target)) · balance \(hm(m.balance, signed: true))")
         chart(m.days)
         attribution(calc, Span(calc.schedule.startOfDay(m.range.lowerBound), calc.schedule.startOfDay(calc.schedule.addDays(m.range.upperBound, 1))))
     }
@@ -289,9 +300,11 @@ struct ReportsView: View {
                 .foregroundStyle(by: .value("Activity", "Work"))
             BarMark(x: .value("Day", d.date.description), y: .value("Hours", Double(d.personal) / Double(Duration.hour)))
                 .foregroundStyle(by: .value("Activity", "Personal"))
+            BarMark(x: .value("Day", d.date.description), y: .value("Hours", Double(d.learn) / Double(Duration.hour)))
+                .foregroundStyle(by: .value("Activity", "Learn"))
             RuleMark(y: .value("Target", Double(d.targetMillis) / Double(Duration.hour))).foregroundStyle(.secondary)
         }
-        .chartForegroundStyleScale(domain: ["Work", "Personal"], range: [WorkStyle.accent, Color.purple])
+        .chartForegroundStyleScale(domain: ["Work", "Personal", "Learn"], range: [WorkStyle.accent, Color.purple, Color.blue])
         .chartLegend(position: .bottom)
         .chartYAxisLabel("Hours")
         .frame(height: 220)
@@ -323,14 +336,14 @@ struct ReviewView: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 16) {
             SectionHeading(title: "Review", subtitle: "You decide what counts as work", symbol: "tray.full")
-            Text("WorkTimer cannot tell a phone call from a break, or work from private activity after hours. These periods are not counted as work until you confirm them.")
+            Text("WorkTimer cannot tell a phone call from a break, or work and learning from private activity after hours. These periods are not counted as work or learning until you confirm them.")
                 .foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
             DisclosureGroup("What needs reviewing?") {
                 VStack(alignment: .leading, spacing: 8) {
                     Text("No input: you may have been in a meeting or on a call.")
                     Text("Tracking gap: the app was closed, interrupted, or could not observe activity.")
                     Text("Outside working hours: activity needs your confirmation before it counts as work.")
-                    Text("Choose Work to include the period in your totals. Break and Private exclude it. Leave an item unanswered if you are unsure; no answer is applied automatically.")
+                    Text("Work counts toward your work target. Learn is separate, but shares the 45-hour weekly limit. Break and Private count toward neither. Leave an item unanswered if you are unsure.")
                 }.font(.callout).foregroundStyle(.secondary).padding(.top, 8)
             }
             if let error = model.reviewError {
@@ -358,6 +371,8 @@ struct ReviewView: View {
                         HStack {
                             Button("Work") { model.resolve(r, as: .work) }
                                 .disabled(r.end == nil && !model.canAnswerLiveReview(r))
+                            Button("Learn") { model.resolve(r, as: .learn) }
+                                .disabled(r.end == nil && !model.canAnswerLiveReview(r))
                             Button("Break") { model.resolve(r, as: .breakTime) }.disabled(r.end == nil)
                             Button("Private") { model.resolve(r, as: .privateTime) }
                                 .disabled(r.end == nil && !model.canAnswerLiveReview(r))
@@ -366,7 +381,7 @@ struct ReviewView: View {
                         }
                         if r.end == nil {
                             Text(model.canAnswerLiveReview(r)
-                                 ? "Work or Private also applies to the rest of this after-hours session."
+                                 ? "Work, Learn or Private also applies to the rest of this after-hours session."
                                  : "This period has no end yet and cannot be answered here.")
                                 .font(.caption).foregroundStyle(.secondary)
                         }

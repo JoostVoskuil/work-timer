@@ -45,6 +45,7 @@ struct WidgetView: View {
                 Text("Today / \(hm(s.todayTarget))").font(.caption).foregroundStyle(.secondary)
                 Divider()
                 Text("Week \(hm(s.weekWork)) / \(hm(s.weekFullTarget))").font(.caption)
+                Text("Work + Learn \(hm(s.weekWork + (s.weekLearn ?? 0))) / \(hm(s.weekCeiling))").font(.caption)
                 Text("Balance \(hm(s.balanceToDate, signed: true))").font(.caption.weight(.medium))
                 Text(s.balanceLabel).font(.caption2).foregroundStyle(.secondary)
                 if s.pending > 0 { Text("\(hm(s.pending)) pending review").font(.caption2).foregroundStyle(.orange) }

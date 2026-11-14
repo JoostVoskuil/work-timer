@@ -20,7 +20,7 @@ public struct BrowserObservation: Equatable {
     }
 }
 
-public enum OutsideAnswer: String { case work, `private`, later }
+public enum OutsideAnswer: String { case work, learn, `private`, later }
 
 public enum EngineEvent {
     case launch(app: String?, idleSeconds: Double)
@@ -30,6 +30,7 @@ public enum EngineEvent {
     case sleep, wake, lock, unlock, sessionResigned, sessionActivated
     case pause, resume
     case pomodoroBreak(Bool)
+    case learning(Bool)
     case tick
     case answerOutside(OutsideAnswer)
     case shutdown
@@ -99,6 +100,7 @@ public final class TrackingEngine {
     private var userIdle = false
     private var idleStart: Millis = 0
     private var breakActive = false
+    private var learningActive = false
     private var app: String?
     private var browserCtx: (state: BrowserState, receivedAt: Millis)?
     private var outside: Outside?
@@ -191,6 +193,9 @@ public final class TrackingEngine {
             case .pause: try endOutside(at: eff); try endIdle(at: eff); paused = true
             case .resume: paused = false
             case .pomodoroBreak(let b): breakActive = b
+            case .learning(let enabled):
+                try endOutside(at: eff)
+                learningActive = enabled
             case .tick: transition = false
             case .answerOutside(let a): try answer(a, at: eff)
             case .shutdown:
@@ -303,8 +308,8 @@ public final class TrackingEngine {
         guard var o = outside, o.answer == nil, a != .later else { return }
         try closeOpen(at: t)
         o.answer = a
-        let cat: Category = a == .work ? .work : .privateTime
-        let reason: Reason = a == .work ? .outsideHoursWork : .outsideHoursPrivate
+        let cat: Category = a == .work ? .work : a == .learn ? .learn : .privateTime
+        let reason: Reason = a == .work ? .outsideHoursWork : a == .learn ? .outsideHoursLearn : .outsideHoursPrivate
         if t > o.start { try ledger.reclassify(span: Span(o.start, t), fromReason: .outsideHours, to: cat, reason: reason) }
         if let id = o.reviewID { try ledger.resolveReview(id: id, resolution: a.rawValue, at: t) }
         outside = o
@@ -336,11 +341,16 @@ public final class TrackingEngine {
             }
         }
         if let d = rules.decide(app: appID, domain: domain) {
+            if d.isWork && (learningActive || outside?.answer == .learn) {
+                return ex(.learn, learningActive ? .learning : .outsideHoursLearn, app: appID, domain: domain)
+            }
             return ex(d.isWork ? .work : .privateTime, d.reason, app: appID, domain: domain)
         }
         if let a = outside?.answer, a != .later {
+            if a == .learn { return ex(.learn, .outsideHoursLearn, app: appID, domain: domain) }
             return a == .work ? ex(.work, .outsideHoursWork, app: appID, domain: domain) : ex(.privateTime, .outsideHoursPrivate, app: appID, domain: domain)
         }
+        if learningActive { return ex(.learn, .learning, app: appID, domain: domain) }
         if schedule.inWorkWindow(t) { return ex(.work, .workWindow, app: appID, domain: domain) }
         if outside == nil {
             let id = try ledger.addReview(ReviewItem(type: .outsideHours, start: t, createdAt: t, dedupeKey: "outside:\(t)"))
@@ -395,6 +405,7 @@ public final class TrackingEngine {
 
     public var isRunning: Bool { started }
     public var isTrackingPaused: Bool { paused }
+    public var isLearning: Bool { learningActive }
     public var pendingOutsideReviewID: Int64? {
         outside?.answer == nil ? outside?.reviewID : nil
     }

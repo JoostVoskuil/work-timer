@@ -31,6 +31,7 @@ public struct Span: Equatable, Hashable, Codable {
 /// How an effective time slice is accounted. Every observed millisecond has exactly one category.
 public enum Category: String, Codable, CaseIterable {
     case work
+    case learn
     case privateTime = "private"
     case breakTime = "break"
     case idle
@@ -42,6 +43,7 @@ public enum Category: String, Codable, CaseIterable {
     public var title: String {
         switch self {
         case .work: return "Work"
+        case .learn: return "Learn"
         case .privateTime: return "Private"
         case .breakTime: return "Break"
         case .idle: return "Idle"
@@ -54,6 +56,7 @@ public enum Category: String, Codable, CaseIterable {
 public enum Reason: String, Codable {
     case workWindow, workRule, privateRule, privateBrowsing
     case outsideHours, outsideHoursWork, outsideHoursPrivate
+    case learning, outsideHoursLearn
     case idleTimeout, pomodoroBreak
     case asleep, locked, sessionInactive, paused
     case appNotRunning, clockJump, suspension
@@ -69,6 +72,8 @@ public enum Reason: String, Codable {
         case .outsideHours: return "Outside work hours, awaiting your answer"
         case .outsideHoursWork: return "Outside work hours, you answered Work"
         case .outsideHoursPrivate: return "Outside work hours, private"
+        case .learning: return "Learning session"
+        case .outsideHoursLearn: return "Outside work hours, you answered Learn"
         case .idleTimeout: return "No input for 5 minutes"
         case .pomodoroBreak: return "Pomodoro break"
         case .asleep: return "Mac was asleep"

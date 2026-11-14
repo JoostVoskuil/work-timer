@@ -61,6 +61,37 @@ private final class Rig {
         #expect(r.total(.work, fri, now: at(2025, 6, 13, 10)) == Duration.hour)
     }
 
+    @Test func learningSessionIsSeparateAndRespectsPrivateRulesAndLock() throws {
+        let r = try Rig()
+        let start = at(2025, 6, 13, 9)
+        try r.send(.launch(app: "com.apple.Xcode", idleSeconds: 0), start)
+        try r.send(.learning(true), start)
+        try r.send(.appActivated("org.videolan.vlc"), start + 10 * Duration.minute)
+        try r.send(.lock, start + 20 * Duration.minute)
+        try r.send(.unlock, start + 30 * Duration.minute)
+        try r.send(.appActivated("com.apple.Xcode"), start + 30 * Duration.minute)
+        try r.send(.learning(false), start + 40 * Duration.minute)
+        try r.send(.tick, start + 50 * Duration.minute)
+        let summary = r.calc(now: start + 50 * Duration.minute).day(fri, now: start + 50 * Duration.minute)
+        #expect(summary.learn == 20 * Duration.minute)
+        #expect(summary.personal == 10 * Duration.minute)
+        #expect(summary.byCategory[.away] == 10 * Duration.minute)
+        #expect(summary.work == 10 * Duration.minute)
+    }
+
+    @Test func afterHoursCanBeAnsweredAsLearn() throws {
+        let r = try Rig()
+        let start = at(2025, 6, 13, 18)
+        try r.send(.launch(app: "a", idleSeconds: 0), start)
+        try r.send(.answerOutside(.learn), start + 10 * Duration.minute)
+        try r.send(.tick, start + 20 * Duration.minute)
+        let summary = r.calc(now: start + 20 * Duration.minute).day(fri, now: start + 20 * Duration.minute)
+        #expect(summary.learn == 20 * Duration.minute)
+        #expect(summary.work == 0)
+        #expect(summary.pending == 0)
+        #expect(r.ledger.reviews(status: .pending).isEmpty)
+    }
+
     @Test func sleepAndLockAreOmittedOutsideWorkHours() throws {
         for unavailable in [EngineEvent.sleep, .lock] {
             let r = try Rig()
@@ -274,6 +305,54 @@ private final class Rig {
 }
 
 @Suite struct AccountingTests {
+    @Test func combinedWeeklyLimitIncludesLearnAndAlertsOnceAtExactly45Hours() throws {
+        let r = try Rig()
+        let start = at(2025, 6, 9, 0)
+        _ = try r.ledger.append(ActivityInterval(span: Span(start, start + 39 * Duration.hour), category: .work, reason: .workWindow))
+        _ = try r.ledger.append(ActivityInterval(span: Span(start + 39 * Duration.hour, start + 44 * Duration.hour), category: .learn, reason: .learning))
+        let day = LocalDate(2025, 6, 13)
+        let now = at(2025, 6, 13, 18)
+        let alerts = WorkAlerts(ledger: r.ledger)
+        var week = r.calc(now: now).week(containing: day, now: now)
+        #expect(week.work == 39 * Duration.hour)
+        #expect(week.learn == 5 * Duration.hour)
+        #expect(week.remainingBeforeCeiling == Duration.hour)
+        #expect(try alerts.newlyReachedWeeklyCeiling(week, at: now) == nil)
+        _ = try r.ledger.append(ActivityInterval(span: Span(start + 44 * Duration.hour, start + 45 * Duration.hour), category: .learn, reason: .learning))
+        week = r.calc(now: now).week(containing: day, now: now)
+        #expect(week.workAndLearn == 45 * Duration.hour)
+        #expect(week.ceilingReached)
+        #expect(week.remainingBeforeCeiling == 0)
+        #expect(week.ceilingProgress == 1)
+        #expect(try alerts.newlyReachedWeeklyCeiling(week, at: now) != nil)
+        #expect(try WorkAlerts(ledger: r.ledger).newlyReachedWeeklyCeiling(week, at: now) == nil)
+        #expect(week.toDateBalance == 39 * Duration.hour - week.toDateTarget)
+        let snapshot = SnapshotBuilder.build(calc: r.calc(now: now), now: now, health: HealthStatus(), status: "Learn")
+        #expect(snapshot.weekLearn == 6 * Duration.hour)
+        let csv = CSV.summary(r.calc(now: now), range: day...day, now: now)
+        #expect(csv.hasPrefix("date,time_zone,work_h,learn_h,"))
+
+        let nextStart = at(2025, 6, 16, 0)
+        _ = try r.ledger.append(ActivityInterval(span: Span(nextStart, nextStart + 46 * Duration.hour), category: .learn, reason: .learning))
+        let nextWeek = r.calc(now: nextStart + 46 * Duration.hour).week(containing: LocalDate(2025, 6, 18), now: nextStart + 46 * Duration.hour)
+        #expect(nextWeek.remainingBeforeCeiling == 0)
+        #expect(nextWeek.workAndLearn == 46 * Duration.hour)
+        #expect(try alerts.newlyReachedWeeklyCeiling(nextWeek, at: nextStart + 46 * Duration.hour) != nil)
+    }
+
+    @Test func completedReviewCanBeClassifiedAsLearning() throws {
+        let r = try Rig()
+        let start = at(2025, 6, 13, 18)
+        let end = start + Duration.hour
+        _ = try r.ledger.append(ActivityInterval(span: Span(start, end), category: .privateTime, reason: .outsideHours))
+        _ = try r.ledger.addReview(ReviewItem(type: .outsideHours, start: start, end: end, createdAt: end, dedupeKey: "learn-review"))
+        let review = try #require(r.ledger.reviews(status: .pending).first)
+        try ReviewResolver(ledger: r.ledger).resolve(review, as: .learn, now: end)
+        #expect(r.calc(now: end).day(LocalDate(2025, 6, 13), now: end).learn == Duration.hour)
+        #expect(r.calc(now: end).day(LocalDate(2025, 6, 13), now: end).work == 0)
+        #expect(r.ledger.reviews(status: .pending).isEmpty)
+    }
+
     @Test func personalTimeExcludesUnansweredAfterHoursAndRemainsSeparateFromWork() throws {
         let r = try Rig()
         let start = at(2025, 6, 13, 18)

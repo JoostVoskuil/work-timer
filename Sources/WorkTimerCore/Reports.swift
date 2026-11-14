@@ -79,6 +79,7 @@ public struct DaySummary: Equatable {
         self.personal = personal ?? byCategory[.privateTime, default: 0]
     }
     public var work: Millis { byCategory[.work] ?? 0 }
+    public var learn: Millis { byCategory[.learn] ?? 0 }
     public var balance: Millis { work - targetMillis }
 }
 
@@ -97,7 +98,11 @@ public struct WeekSummary: Equatable {
     public var toDateBalance: Millis { workToDate - toDateTarget }
     public var workToDate: Millis
     public var fullWeekBalance: Millis { work - fullWeekTarget }
-    public var ceilingProgress: Double { weeklyCeiling > 0 ? Double(work) / Double(weeklyCeiling) : 0 }
+    public var learn: Millis { days.reduce(0) { $0 + $1.learn } }
+    public var workAndLearn: Millis { work + learn }
+    public var remainingBeforeCeiling: Millis { max(0, weeklyCeiling - workAndLearn) }
+    public var ceilingReached: Bool { workAndLearn >= weeklyCeiling }
+    public var ceilingProgress: Double { weeklyCeiling > 0 ? Double(workAndLearn) / Double(weeklyCeiling) : 0 }
 }
 
 public struct MonthSummary: Equatable {
@@ -107,6 +112,7 @@ public struct MonthSummary: Equatable {
     public var target: Millis
     public var pending: Millis
     public var balance: Millis { work - target }
+    public var learn: Millis { days.reduce(0) { $0 + $1.learn } }
 }
 
 public struct AttributionRow: Equatable {

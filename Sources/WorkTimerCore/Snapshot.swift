@@ -29,6 +29,8 @@ public struct WidgetSnapshot: Codable, Equatable {
     public var pending: Millis
     public var health: HealthStatus
     public var status: String
+    public var todayLearn: Millis? = nil
+    public var weekLearn: Millis? = nil
 }
 
 public enum SnapshotLoad: Equatable {
@@ -65,6 +67,7 @@ public enum SnapshotBuilder {
         return WidgetSnapshot(generatedAt: now, timeZone: calc.schedule.timeZone.identifier, todayWork: day.work, todayTarget: day.targetMillis,
                               todayCeiling: Millis(v.dailyCeilingMinutes) * Duration.minute, weekWork: week.work, weekFullTarget: week.fullWeekTarget,
                               weekToDateTarget: week.toDateTarget, weekCeiling: week.weeklyCeiling, balanceToDate: week.toDateBalance,
-                              balanceLabel: label, currentDayIncomplete: week.currentDayIncomplete, pending: week.pending, health: health, status: status)
+                              balanceLabel: label, currentDayIncomplete: week.currentDayIncomplete, pending: week.pending, health: health, status: status,
+                              todayLearn: day.learn, weekLearn: week.learn)
     }
 }

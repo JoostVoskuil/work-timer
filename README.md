@@ -23,6 +23,8 @@ Requires macOS 27 or later and Xcode with the macOS 27 SDK to build.
 - One calculator (`ReportCalculator`) feeds the menu bar, reports, widget snapshot and CSV.
 - Pending review totals include only time covered by actual unanswered Review items, not every unknown recording reason. Unknown time without a Review item remains excluded from work.
 - Report charts stack work (teal) and personal time (purple) with a legend. Personal time includes private rules, private browsing and confirmed private activity; unanswered after-hours activity is excluded until classified. Personal time never contributes to work balances.
+- Learn (blue) is a separate category, not contractual work. Start/end a learning session from the menu bar, classify Review items as Learn, or change a timeline entry to Learn. Learning sessions respect private rules, idle, sleep, lock and break exclusions and end when the app restarts.
+- Work + Learn share the weekly ceiling (45 hours by default). Reports, the menu and widgets show the combined usage; a notification warns once per week when the ceiling is reached. Actual time remains recorded even above the limit, rather than silently truncated. Work targets and balances still use Work only. Summary CSV includes `learn_h`.
 
 ## Rule precedence
 Private beats work on ties; domain rules beat app rules. Default private: nu.nl, nos.nl, tweakers.net, VLC. Hostname matching is exact or `.`-suffix (so `menu.nl` does not match `nu.nl`).

@@ -1,9 +1,10 @@
 import Foundation
 
-public enum ReviewAnswer: String { case work, breakTime, privateTime, later
+public enum ReviewAnswer: String { case work, learn, breakTime, privateTime, later
     var category: Category? {
         switch self {
         case .work: return .work
+        case .learn: return .learn
         case .breakTime: return .breakTime
         case .privateTime: return .privateTime
         case .later: return nil
@@ -27,8 +28,8 @@ public struct ReviewResolver {
                 guard let cut = span.intersection(range) else { continue }
                 guard let cat = answer.category else { kept = true; continue }
                 // A late outside-hours answer only affects the still-pending part; private-domain and break exclusions stay.
-                if review.type == .outsideHours, cat == .work || cat == .privateTime {
-                    try ledger.reclassify(span: cut, fromReason: .outsideHours, to: cat, reason: cat == .work ? .outsideHoursWork : .outsideHoursPrivate)
+                if review.type == .outsideHours, cat == .work || cat == .learn || cat == .privateTime {
+                    try ledger.reclassify(span: cut, fromReason: .outsideHours, to: cat, reason: cat == .work ? .outsideHoursWork : cat == .learn ? .outsideHoursLearn : .outsideHoursPrivate)
                     continue
                 }
                 try ledger.addAdjustment(Adjustment(span: cut, category: cat, note: "Review answer", createdAt: now, reviewID: id))

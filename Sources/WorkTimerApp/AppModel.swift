@@ -13,6 +13,7 @@ private final class NotificationHandler: NSObject, UNUserNotificationCenterDeleg
         let answer: OutsideAnswer?
         switch response.actionIdentifier {
         case "AFTER_HOURS_WORK": answer = .work
+        case "AFTER_HOURS_LEARN": answer = .learn
         case "AFTER_HOURS_PRIVATE": answer = .private
         case "AFTER_HOURS_LATER": answer = .later
         default: answer = nil
@@ -39,6 +40,7 @@ final class AppModel: ObservableObject {
     @Published var pomodoro = PomodoroState()
     @Published var pomodoroRemaining: Millis = 0
     @Published var paused = false
+    @Published var learning = false
     @Published var health = HealthStatus()
     @Published var launchAtLogin = false
     @Published var fatalError: String?
@@ -175,6 +177,7 @@ final class AppModel: ObservableObject {
         week = calc.week(containing: d, now: now)
         reviews = ledger.reviews(status: .pending)
         paused = engine?.isTrackingPaused ?? false
+        learning = engine?.isLearning ?? false
         evaluateAlerts(calc: calc, date: d)
         if now - lastSnapshot > 30_000 { publishSnapshot(); lastSnapshot = now }
     }
@@ -195,6 +198,14 @@ final class AppModel: ObservableObject {
         for a in alerts.newlyCrossed(todayWork: today.work, date: date, schedule: calc.schedule, at: now) {
             notify(title: a.title, body: a.body, id: "alert-\(a.minutes)")
         }
+        do {
+            if let week, let alert = try alerts.newlyReachedWeeklyCeiling(week, at: now) {
+                notify(title: alert.title, body: alert.body, id: "weekly-ceiling-\(week.weekStart)")
+            }
+        } catch {
+            health.messages = ["Could not save weekly limit notification: \(error.localizedDescription)"]
+            NSLog("%@", health.messages[0])
+        }
     }
 
     private var canNotify: Bool { Bundle.main.bundleIdentifier != nil }
@@ -202,10 +213,11 @@ final class AppModel: ObservableObject {
     private func configureNotifications() {
         guard canNotify else { return }
         let work = UNNotificationAction(identifier: "AFTER_HOURS_WORK", title: "Work")
+        let learn = UNNotificationAction(identifier: "AFTER_HOURS_LEARN", title: "Learn")
         let privateTime = UNNotificationAction(identifier: "AFTER_HOURS_PRIVATE", title: "Private")
         let later = UNNotificationAction(identifier: "AFTER_HOURS_LATER", title: "Ask Later")
         let category = UNNotificationCategory(identifier: "AFTER_HOURS",
-                                              actions: [work, privateTime, later],
+                                              actions: [work, learn, privateTime, later],
                                               intentIdentifiers: [])
         let center = UNUserNotificationCenter.current()
         center.delegate = notificationHandler
@@ -216,7 +228,7 @@ final class AppModel: ObservableObject {
         let isPrompting = status?.outsidePrompt == true
         if isPrompting && !lastOutsidePrompt {
             notify(title: "What are you doing?",
-                   body: "You’re active outside your working hours. Count this as work or private time?",
+                   body: "You’re active outside your working hours. Is this Work, Learn or Private time?",
                    id: "after-hours-\(status?.since ?? now)",
                    category: "AFTER_HOURS")
         }
@@ -336,6 +348,7 @@ final class AppModel: ObservableObject {
     // MARK: Tracking controls
 
     func togglePause() { send(paused ? .resume : .pause); refresh() }
+    func toggleLearning() { send(.learning(!learning)); refresh() }
     func answerOutside(_ a: OutsideAnswer) {
         send(.answerOutside(a))
         UNUserNotificationCenter.current().removeDeliveredNotifications(withIdentifiers: ["after-hours-\(status?.since ?? now)"])
@@ -356,11 +369,11 @@ final class AppModel: ObservableObject {
         }
         do {
             if r.end == nil {
-                guard canAnswerLiveReview(r), a == .work || a == .privateTime else {
+                guard canAnswerLiveReview(r), a == .work || a == .learn || a == .privateTime else {
                     reviewError = "This period is still open. Wait until it ends before classifying it."
                     return
                 }
-                _ = try engine?.handle(.answerOutside(a == .work ? .work : .private), at: stamp())
+                _ = try engine?.handle(.answerOutside(a == .work ? .work : a == .learn ? .learn : .private), at: stamp())
             } else {
                 try ReviewResolver(ledger: ledger).resolve(r, as: a, now: Self.wallNow())
             }

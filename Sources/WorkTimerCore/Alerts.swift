@@ -40,4 +40,16 @@ public struct WorkAlerts {
     public func suppressCrossed(todayWork: Millis, date: LocalDate, schedule: Schedule, at now: Millis) {
         _ = newlyCrossed(todayWork: todayWork, date: date, schedule: schedule, at: now)
     }
+
+    public func newlyReachedWeeklyCeiling(_ week: WeekSummary, at now: Millis) throws -> AlertThreshold? {
+        guard week.ceilingReached else { return nil }
+        return try ledger.db.transaction {
+            let key = "weekly-work-learn-ceiling:\(week.weekStart):\(week.weeklyCeiling)"
+            guard ledger.getSetting(key) == nil else { return nil }
+            try ledger.setSetting(key, String(now))
+            return AlertThreshold(minutes: Int(week.weeklyCeiling / Duration.minute),
+                                  title: "Work + Learn weekly limit reached",
+                                  body: "Your combined work and learning time has reached \(week.weeklyCeiling / Duration.hour) hours this week. Time to stop for the week.")
+        }
+    }
 }

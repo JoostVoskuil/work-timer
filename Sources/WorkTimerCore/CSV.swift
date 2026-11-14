@@ -15,10 +15,10 @@ public enum CSV {
 
     /// Daily summary rows for a range, using the same calculator as the app screens.
     public static func summary(_ calc: ReportCalculator, range: ClosedRange<LocalDate>, now: Millis) -> String {
-        var lines = ["date,time_zone,work_h,private_h,break_h,idle_h,away_h,unknown_h,pending_h,target_h,balance_h"]
+        var lines = ["date,time_zone,work_h,learn_h,private_h,break_h,idle_h,away_h,unknown_h,pending_h,target_h,balance_h"]
         for d in calc.days(range, now: now) {
             let c: (Category) -> String = { hours(d.byCategory[$0] ?? 0) }
-            lines.append([d.date.description, calc.schedule.timeZone.identifier, c(.work), c(.privateTime), c(.breakTime), c(.idle), c(.away), c(.gap),
+            lines.append([d.date.description, calc.schedule.timeZone.identifier, c(.work), c(.learn), c(.privateTime), c(.breakTime), c(.idle), c(.away), c(.gap),
                           hours(d.pending), hours(d.targetMillis), hours(d.balance)].map(escape).joined(separator: ","))
         }
         return lines.joined(separator: "\n") + "\n"
