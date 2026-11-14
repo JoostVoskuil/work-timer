@@ -505,4 +505,19 @@ private final class Rig {
         let r = try Rig()
         #expect(SnapshotStore(directory: r.dir).load() == .unavailable)
     }
+
+    @Test func widgetReaderLoadsSnapshotPublishedByApp() throws {
+        let r = try Rig()
+        let sharedDirectory = r.dir.appendingPathComponent("shared")
+        let now = at(2025, 6, 13, 12)
+        let snapshot = SnapshotBuilder.build(calc: r.calc(now: now), now: now, health: HealthStatus(), status: "Work")
+        let writer = SnapshotStore(directory: sharedDirectory)
+        let reader = SnapshotStore(directory: sharedDirectory)
+        try writer.publish(snapshot)
+        #expect(reader.load() == .ok(snapshot))
+        var updated = snapshot
+        updated.todayLearn = Duration.hour
+        try writer.publish(updated)
+        #expect(reader.load() == .ok(updated))
+    }
 }

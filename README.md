@@ -13,6 +13,7 @@ Requires macOS 27 or later and Xcode with the macOS 27 SDK to build.
 
 ## Data
 - Stored in your user profile: `~/Library/Application Support/WorkTimer/worktimer.sqlite` (plus `Backups/`). Backups are plain SQLite and **not encrypted**.
+- The app also publishes its widget summary to the shared App Group container, using the same location resolver as the widget. The database stays in the user profile. Successful publication requests a timeline reload on launch and at most every 15 minutes thereafter; macOS controls refresh timing.
 - **After an update** the app takes a pre-migration backup, migrates, republishes the widget snapshot and asks WidgetKit to reload all timelines. The version is recorded only after success.
 - Deviation from the plan: the system SQLite3 library is used instead of GRDB (no dependencies).
 

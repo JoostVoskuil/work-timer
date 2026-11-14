@@ -58,6 +58,8 @@ final class AppModel: ObservableObject {
     private var timer: Timer?
     private var ingestionSuspended = false
     private var lastSnapshot: Millis = 0
+    private var lastWidgetReload: Millis?
+    private var widgetPublishError: String?
     private var lastBreakActive = false
     private var lastOutsidePrompt = false
     private var didPromptNotificationSettings = false
@@ -188,8 +190,23 @@ final class AppModel: ObservableObject {
         guard let calc = calculator, let snapshots else { return }
         var h = health
         h.trackingPaused = paused
-        if (try? snapshots.publish(SnapshotBuilder.build(calc: calc, now: now, health: h, status: status?.category.title ?? "Stopped"))) == nil {
-            health.messages = ["Could not write widget data"]
+        do {
+            let snapshot = SnapshotBuilder.build(calc: calc, now: now, health: h, status: status?.category.title ?? "Stopped")
+            try snapshots.publish(snapshot)
+            try SnapshotStore.sharedContainer().publish(snapshot)
+            if let widgetPublishError { health.messages.removeAll { $0 == widgetPublishError } }
+            widgetPublishError = nil
+            if lastWidgetReload == nil || now - (lastWidgetReload ?? now) >= 15 * Duration.minute {
+                NSLog("WorkTimer published shared widget snapshot; requesting timeline reload")
+                WidgetCenter.shared.reloadTimelines(ofKind: "WorkTimerSummary")
+                lastWidgetReload = now
+            }
+        } catch {
+            let message = "Could not publish widget data: \(error.localizedDescription)"
+            if let widgetPublishError { health.messages.removeAll { $0 == widgetPublishError } }
+            widgetPublishError = message
+            health.messages.append(message)
+            NSLog("%@", message)
         }
     }
 

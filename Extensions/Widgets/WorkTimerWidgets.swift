@@ -9,7 +9,11 @@ struct Entry: TimelineEntry {
 
 struct Provider: TimelineProvider {
     static func store() -> SnapshotStore? {
-        FileManager.default.containerURL(forSecurityApplicationGroupIdentifier: "group.nl.worktimer.shared").map { SnapshotStore(directory: $0) }
+        do { return try SnapshotStore.sharedContainer() }
+        catch {
+            NSLog("WorkTimer widget could not open shared storage: %@", error.localizedDescription)
+            return nil
+        }
     }
     func placeholder(in context: Context) -> Entry { Entry(date: Date(), load: .unavailable) }
     func getSnapshot(in context: Context, completion: @escaping (Entry) -> Void) { completion(Entry(date: Date(), load: Self.store()?.load() ?? .unavailable)) }

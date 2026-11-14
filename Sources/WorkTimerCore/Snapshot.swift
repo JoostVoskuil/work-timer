@@ -40,12 +40,28 @@ public enum SnapshotLoad: Equatable {
 }
 
 public struct SnapshotStore {
+    public static let appGroupIdentifier = "group.nl.worktimer.shared"
+
+    public static func sharedContainer() throws -> SnapshotStore {
+        guard let directory = FileManager.default.containerURL(forSecurityApplicationGroupIdentifier: appGroupIdentifier) else {
+            throw SharedSnapshotError.containerUnavailable
+        }
+        return SnapshotStore(directory: directory)
+    }
+
     public let url: URL
     public init(directory: URL) { url = directory.appendingPathComponent("widget-snapshot.json") }
 
     public func publish(_ s: WidgetSnapshot) throws {
         try FileManager.default.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
         try JSONEncoder().encode(s).write(to: url, options: .atomic)
+    }
+
+    public enum SharedSnapshotError: LocalizedError {
+        case containerUnavailable
+        public var errorDescription: String? {
+            "The WorkTimer App Group is unavailable. Install the signed app with its App Group entitlement."
+        }
     }
 
     public func load() -> SnapshotLoad {
