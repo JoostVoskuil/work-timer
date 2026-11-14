@@ -61,6 +61,45 @@ private final class Rig {
         #expect(r.total(.work, fri, now: at(2025, 6, 13, 10)) == Duration.hour)
     }
 
+    @Test func sleepAndLockAreOmittedOutsideWorkHours() throws {
+        for unavailable in [EngineEvent.sleep, .lock] {
+            let r = try Rig()
+            let start = at(2025, 6, 13, 18)
+            let end = at(2025, 6, 13, 19)
+            try r.send(.launch(app: "a", idleSeconds: 0), start)
+            try r.send(unavailable, start)
+            try r.send(.tick, end)
+            #expect(r.engine.liveStatus() == nil)
+            #expect(r.engine.liveInterval(now: end) == nil)
+            #expect(try r.ledger.intervals(in: Span(start, end)).isEmpty)
+        }
+    }
+
+    @Test func sleepAndLockAreClippedToWorkWindow() throws {
+        for unavailable in [EngineEvent.sleep, .lock] {
+            let r = try Rig()
+            let start = at(2025, 6, 13, 6)
+            let end = at(2025, 6, 13, 18)
+            try r.send(.launch(app: "a", idleSeconds: 0), start)
+            try r.send(unavailable, start)
+            try r.send(.tick, end)
+            let intervals = try r.ledger.intervals(in: Span(start, end))
+            #expect(intervals.count == 1)
+            #expect(intervals.first?.category == .away)
+            #expect(intervals.first?.span == Span(at(2025, 6, 13, 7), at(2025, 6, 13, 17)))
+            #expect(r.total(.work, fri, now: end) == 0)
+        }
+    }
+
+    @Test func unlockingOutsideHoursResumesOutsidePrompt() throws {
+        let r = try Rig()
+        try r.send(.launch(app: "a", idleSeconds: 0), at(2025, 6, 13, 18))
+        try r.send(.lock, at(2025, 6, 13, 18))
+        try r.send(.unlock, at(2025, 6, 13, 19))
+        #expect(r.engine.liveStatus()?.outsidePrompt == true)
+        #expect(r.engine.liveStatus()?.since == at(2025, 6, 13, 19))
+    }
+
     @Test func idleBelowThresholdCountsAsWork() throws {
         let r = try Rig()
         let t0 = at(2025, 6, 13, 10)

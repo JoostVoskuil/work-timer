@@ -18,6 +18,7 @@ Requires macOS 27 or later and Xcode with the macOS 27 SDK to build.
 
 ## Accounting definitions
 - Work = classified work time; private, break, idle, away and unknown are excluded. Outside-hours time is *pending* (not work) until answered.
+- Sleep and screen-locked intervals are recorded only within the configured work window. They remain away time, available for manual correction if you were working (for example, on a phone call); outside that window they are omitted.
 - Week-to-date balance = work Monday..selected day minus scheduled targets for those days (today's full target counts and is labelled "incomplete").
 - One calculator (`ReportCalculator`) feeds the menu bar, reports, widget snapshot and CSV.
 

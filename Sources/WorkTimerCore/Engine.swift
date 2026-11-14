@@ -316,8 +316,9 @@ public final class TrackingEngine {
         return c.state
     }
 
-    private func desired(at t: Millis) throws -> Open {
+    private func desired(at t: Millis) throws -> Open? {
         func ex(_ c: Category, _ r: Reason, app: String? = nil, domain: String? = nil) -> Open { Open(start: t, category: c, reason: r, app: app, domain: domain) }
+        if (asleep || locked) && !schedule.inWorkWindow(t) { return nil }
         if asleep { return ex(.away, .asleep) }
         if locked { return ex(.away, .locked) }
         if inactive { return ex(.away, .sessionInactive) }
@@ -351,7 +352,10 @@ public final class TrackingEngine {
         guard started else { return }
         if boundary { try endOutside(at: t) }
         if !tracking || userIdle { try endOutside(at: t) }
-        let d = try desired(at: t)
+        guard let d = try desired(at: t) else {
+            try closeOpen(at: t)
+            return
+        }
         if let o = open, o.sameKey(d) { return }
         try closeOpen(at: t)
         open = d
