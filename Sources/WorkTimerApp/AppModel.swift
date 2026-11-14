@@ -42,6 +42,8 @@ final class AppModel: ObservableObject {
     @Published var health = HealthStatus()
     @Published var launchAtLogin = false
     @Published var fatalError: String?
+    @Published var notificationTestStatus: String?
+    @Published var isSendingTestNotification = false
 
     private(set) var ledger: Ledger?
     private(set) var location: DatabaseLocation?
@@ -266,10 +268,53 @@ final class AppModel: ObservableObject {
         let c = UNMutableNotificationContent()
         c.title = title; c.body = body; c.sound = .default
         if let category { c.categoryIdentifier = category }
-        UNUserNotificationCenter.current().add(UNNotificationRequest(identifier: id, content: c, trigger: nil))
+        UNUserNotificationCenter.current().add(UNNotificationRequest(identifier: id, content: c, trigger: nil)) { [weak self] error in
+            guard let error else { return }
+            let message = "Notification failed: \(error.localizedDescription)"
+            NSLog("%@", message)
+            Task { @MainActor in self?.notificationTestStatus = message }
+        }
     }
 
-    func sendTestNotification() { notify(title: "WorkTimer", body: "Notifications are working.") }
+    func sendTestNotification() {
+        guard !isSendingTestNotification else { return }
+        guard canNotify else {
+            notificationTestStatus = "Run the installed WorkTimer app to send notifications."
+            return
+        }
+        isSendingTestNotification = true
+        notificationTestStatus = "Checking notification permission…"
+        Task {
+            defer { isSendingTestNotification = false }
+            let center = UNUserNotificationCenter.current()
+            do {
+                var settings = await center.notificationSettings()
+                if settings.authorizationStatus == .notDetermined {
+                    _ = try await center.requestAuthorization(options: [.alert, .sound])
+                    settings = await center.notificationSettings()
+                }
+                guard [.authorized, .provisional].contains(settings.authorizationStatus) else {
+                    health.notificationsOK = false
+                    notificationTestStatus = "Notifications are blocked. Open Notification Settings and allow WorkTimer."
+                    return
+                }
+                health.notificationsOK = true
+                let content = UNMutableNotificationContent()
+                content.title = "WorkTimer test"
+                content.body = "Notifications are working."
+                content.sound = .default
+                try await center.add(UNNotificationRequest(identifier: UUID().uuidString, content: content, trigger: nil))
+                if settings.alertSetting == .disabled {
+                    notificationTestStatus = "Test sent, but banners are disabled. Enable alerts for WorkTimer in Notification Settings."
+                } else {
+                    notificationTestStatus = "Test sent. If no banner appears, check Notification Center and allow WorkTimer in your active Focus mode."
+                }
+            } catch {
+                notificationTestStatus = "Notification failed: \(error.localizedDescription)"
+                NSLog("%@", notificationTestStatus ?? "Notification failed")
+            }
+        }
+    }
 
     // MARK: Pomodoro
 

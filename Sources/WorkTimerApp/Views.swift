@@ -383,6 +383,11 @@ struct SettingsView: View {
                     VStack(alignment: .leading) {
                         Toggle("Launch at login", isOn: Binding(get: { model.launchAtLogin }, set: { model.setLaunchAtLogin($0) }))
                         Button("Send test notification") { model.sendTestNotification() }
+                            .disabled(model.isSendingTestNotification)
+                        if let status = model.notificationTestStatus {
+                            Text(status).font(.caption).foregroundStyle(.secondary).textSelection(.enabled)
+                            Button("Open Notification Settings") { model.openNotificationSettings() }
+                        }
                         Button("Reveal data folder") { model.revealDataFolder() }
                     }.frame(maxWidth: .infinity, alignment: .leading)
                 }
