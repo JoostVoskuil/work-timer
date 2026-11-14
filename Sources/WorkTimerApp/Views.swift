@@ -178,6 +178,7 @@ struct TodayView: View {
             SectionHeading(title: "Today", subtitle: Date().formatted(date: .complete, time: .omitted), symbol: "sun.max")
             HStack(spacing: 0) {
                 stat("Work", hm(model.today.work))
+                stat("Private", hm(model.today.personal))
                 stat("Learn", hm(model.today.learn))
                 stat("Target", hm(model.today.targetMillis))
                 stat("Balance", hm(model.today.balance, signed: true) + (model.today.isToday ? " (incomplete)" : ""))
