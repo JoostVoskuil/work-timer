@@ -14,7 +14,7 @@ cat > "$APP/Contents/Info.plist" <<PLIST
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0"><dict>
-  <key>CFBundleIdentifier</key><string>nl.worktimer.app</string>
+  <key>CFBundleIdentifier</key><string>nl.foxhole.worktimer</string>
   <key>CFBundleName</key><string>WorkTimer</string>
   <key>CFBundleIconFile</key><string>WorkTimer</string>
   <key>CFBundleExecutable</key><string>WorkTimer</string>

@@ -4,14 +4,14 @@ name: WorkTimer
 options: { deploymentTarget: { macOS: "27.0" } }
 packages:
   WorkTimer: { path: .. }
-settings: { base: { SWIFT_VERSION: "6.0", MARKETING_VERSION: "1.0", CURRENT_PROJECT_VERSION: "1", WORKTIMER_APP_GROUP: "$(DEVELOPMENT_TEAM).nl.worktimer.shared" } }
+settings: { base: { SWIFT_VERSION: "6.0", MARKETING_VERSION: "1.0", CURRENT_PROJECT_VERSION: "1", WORKTIMER_APP_GROUP: "$(DEVELOPMENT_TEAM).nl.foxhole.worktimer.shared" } }
 targets:
   WorkTimer:
     type: application
     platform: macOS
     sources: [../Sources/WorkTimerApp]
     dependencies: [{ package: WorkTimer, product: WorkTimerCore }, { target: SafariExtension }, { target: Widgets }]
-    settings: { base: { PRODUCT_BUNDLE_IDENTIFIER: nl.worktimer.app } }
+    settings: { base: { PRODUCT_BUNDLE_IDENTIFIER: nl.foxhole.worktimer } }
     info:
       path: App-Info.plist
       properties: { LSUIElement: true, CFBundleDisplayName: WorkTimer, CFBundleIconFile: WorkTimer, WorkTimerAppGroup: "$(WORKTIMER_APP_GROUP)" }
@@ -21,7 +21,7 @@ targets:
     platform: macOS
     sources: [SafariExtension]
     dependencies: [{ package: WorkTimer, product: WorkTimerCore }]
-    settings: { base: { PRODUCT_BUNDLE_IDENTIFIER: nl.worktimer.app.safari } }
+    settings: { base: { PRODUCT_BUNDLE_IDENTIFIER: nl.foxhole.worktimer.safari } }
     info:
       path: Safari-Info.plist
       properties:
@@ -36,7 +36,7 @@ targets:
     platform: macOS
     sources: [Widgets]
     dependencies: [{ package: WorkTimer, product: WorkTimerCore }]
-    settings: { base: { PRODUCT_BUNDLE_IDENTIFIER: nl.worktimer.app.widgets } }
+    settings: { base: { PRODUCT_BUNDLE_IDENTIFIER: nl.foxhole.worktimer.widgets } }
     info:
       path: Widgets-Info.plist
       properties:

@@ -61,7 +61,7 @@ final class AppModel: ObservableObject {
     private var lastSnapshot: Millis = 0
     private var lastWidgetReload: Millis?
     private var widgetPublishError: String?
-    private let widgetLogger = Logger(subsystem: "nl.worktimer.app", category: "WidgetPublishing")
+    private let widgetLogger = Logger(subsystem: "nl.foxhole.worktimer", category: "WidgetPublishing")
     private var lastBreakActive = false
     private var lastOutsidePrompt = false
     private var didPromptNotificationSettings = false

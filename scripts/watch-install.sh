@@ -107,7 +107,7 @@ build_install_launch() {
     -f "$INSTALL_APP" || return $?
   /usr/bin/pluginkit -a "$INSTALL_APP/Contents/PlugIns/Widgets.appex" || return $?
   local registered
-  registered="$(/usr/bin/pluginkit -m -A -D -v -i nl.worktimer.app.widgets)" || return $?
+  registered="$(/usr/bin/pluginkit -m -A -D -v -i nl.foxhole.worktimer.widgets)" || return $?
   if ! printf '%s\n' "$registered" | grep -Fq "$INSTALL_APP/Contents/PlugIns/Widgets.appex"; then
     echo "macOS did not discover the installed widget extension. Check PlugInKit logs for rejection details." >&2
     return 1

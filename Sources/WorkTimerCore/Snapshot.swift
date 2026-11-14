@@ -68,7 +68,7 @@ public struct SnapshotStore {
     public static func sharedDirectory() throws -> URL {
         guard let appGroupIdentifier = Bundle.main.object(forInfoDictionaryKey: "WorkTimerAppGroup") as? String,
               !appGroupIdentifier.hasPrefix("."), !appGroupIdentifier.contains("$"),
-              appGroupIdentifier.hasSuffix(".nl.worktimer.shared") else {
+              appGroupIdentifier.hasSuffix(".nl.foxhole.worktimer.shared") else {
             throw SharedSnapshotError.containerUnavailable
         }
         guard let directory = FileManager.default.containerURL(forSecurityApplicationGroupIdentifier: appGroupIdentifier) else {
