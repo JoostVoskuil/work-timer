@@ -39,23 +39,36 @@ final class AppModel: ObservableObject {
     @Published var week: WeekSummary?
     @Published var reviews: [ReviewItem] = []
     @Published var pomodoro = PomodoroState()
-    @Published var pomodoroRemaining: Millis = 0
+    let pomodoroDisplay = PomodoroCountdownDisplay()
+
+    var livePomodoroRemaining: Millis { pomo?.remaining(stamp()) ?? 0 }
     @Published var paused = false
     @Published var learning = false
+    @Published var manualMode: WorkTimerCore.Category?
+    @Published var scheduledMode: WorkTimerCore.Category = .privateTime
     @Published var health = HealthStatus()
     @Published var launchAtLogin = false
     @Published var fatalError: String?
     @Published var reviewError: String?
     @Published var notificationTestStatus: String?
     @Published var isSendingTestNotification = false
+    @Published var activityBlocks: [ActivityBlock] = []
+    @Published var menuHours: [WidgetGraphBucket] = []
+    private var menuIsVisible = false
+    @Published private(set) var selectedActivityDate: LocalDate?
+    @Published var activityDay = DaySummary(date: LocalDate(2000, 1, 1), byCategory: [:], pending: 0, targetMillis: 0, isToday: true)
+    @Published var blockCorrections: [Adjustment] = []
+    @Published var compactionNotice: String?
 
     private(set) var ledger: Ledger?
     private(set) var location: DatabaseLocation?
+    private var instanceLock: SingleInstanceLock?
     private var engine: TrackingEngine?
     private var pomo: PomodoroTimer?
     private var alerts: WorkAlerts?
     private var inbox: BrowserInbox?
     private var snapshots: SnapshotStore?
+    private var appNames: [String: String] = [:]
     private var timer: Timer?
     private var ingestionSuspended = false
     private var lastSnapshot: Millis = 0
@@ -63,7 +76,6 @@ final class AppModel: ObservableObject {
     private var widgetPublishError: String?
     private let widgetLogger = Logger(subsystem: "nl.foxhole.worktimer", category: "WidgetPublishing")
     private var lastBreakActive = false
-    private var lastOutsidePrompt = false
     private var didPromptNotificationSettings = false
     private let notificationHandler = NotificationHandler()
 
@@ -73,18 +85,74 @@ final class AppModel: ObservableObject {
     var calculator: ReportCalculator? {
         guard let ledger, let engine else { return nil }
         let t = now
-        return ReportCalculator(ledger: ledger, live: { engine.liveInterval(now: t) })
+        return ReportCalculator(ledger: ledger, liveBlocks: { engine.liveIntervals(now: t) })
+    }
+
+    /// Apps seen in the last two weeks plus currently running regular apps, sorted by name, for picking app rules.
+    func knownAppIdentifiers() -> [String] {
+        var ids = Set(NSWorkspace.shared.runningApplications
+            .filter { $0.activationPolicy == .regular }
+            .compactMap(\.bundleIdentifier))
+        if let calc = calculator {
+            let today = calc.schedule.localDate(now)
+            let span = Span(calc.schedule.startOfDay(calc.schedule.addDays(today, -13)), max(now, calc.schedule.startOfDay(today) + 1))
+            for block in (try? calc.blocks(in: span)) ?? [] { ids.formUnion(block.apps) }
+        }
+        ids.remove(Bundle.main.bundleIdentifier ?? "")
+        return ids.sorted { appName(for: $0).localizedCaseInsensitiveCompare(appName(for: $1)) == .orderedAscending }
+    }
+
+    func addAppRule(_ identifier: String, category: WorkTimerCore.Category) {
+        upsert(ClassificationRule(kind: .app, pattern: identifier, category: category))
+    }
+
+    func copyToPasteboard(_ text: String) {
+        NSPasteboard.general.clearContents()
+        NSPasteboard.general.setString(text, forType: .string)
+    }
+
+    func appName(for identifier: String) -> String {
+        if let name = appNames[identifier] { return name }
+        guard let url = NSWorkspace.shared.urlForApplication(withBundleIdentifier: identifier) else {
+            appNames[identifier] = identifier
+            return identifier
+        }
+        let bundle = Bundle(url: url)
+        let name = bundle?.object(forInfoDictionaryKey: "CFBundleDisplayName") as? String
+            ?? bundle?.object(forInfoDictionaryKey: "CFBundleName") as? String
+            ?? url.deletingPathExtension().lastPathComponent
+        appNames[identifier] = name
+        return name
     }
 
     // MARK: Startup
 
     func start() {
+        guard instanceLock == nil else { return }
         do {
             let loc = try DatabaseLocation.userProfile()
             try loc.prepare()
+            do {
+                instanceLock = try SingleInstanceLock(at: loc.directory.appendingPathComponent("worktimer.lock"))
+            } catch SingleInstanceError.alreadyRunning {
+                Logger(subsystem: "nl.foxhole.worktimer", category: "Lifecycle")
+                    .notice("Another WorkTimer instance already owns the tracking lock; exiting")
+                NSApplication.shared.terminate(nil)
+                return
+            }
             location = loc
-            let ledger = try Ledger(path: loc.databaseURL.path, backupsDirectory: loc.backupsDirectory)
+            let ledger = try Ledger(path: loc.databaseURL.path)
             self.ledger = ledger
+            if let backup = ledger.compactionBackup {
+                compactionNotice = "History compacted into five-minute blocks. Original detail is backed up at \(backup)"
+            }
+            if let backup = ledger.getSetting("late_legacy_backup") {
+                compactionNotice = (compactionNotice.map { $0 + "\n" } ?? "") + "Late records from an older copy were reconciled. Backup: \(backup). Use only /Applications/WorkTimer.app."
+            }
+            if let backup = ledger.getSetting("inactive_cleanup_backup") {
+                compactionNotice = (compactionNotice.map { $0 + "\n" } ?? "") + "Outside-hours Away cleanup backup: \(backup). Mixed or corrected blocks were preserved."
+            }
+            if let error = ledger.getSetting("compaction_maintenance_error") { health.messages.append(error) }
             let engine = TrackingEngine(ledger: ledger)
             self.engine = engine
             let pomo = PomodoroTimer(ledger: ledger)
@@ -122,6 +190,7 @@ final class AppModel: ObservableObject {
     }
 
     func shutdown() {
+        pomodoroDisplay.stop()
         _ = try? engine?.handle(.shutdown, at: stamp())
     }
 
@@ -164,8 +233,7 @@ final class AppModel: ObservableObject {
         send(.tick)
         if let ev = pomo?.tick(st) { handlePomodoro(ev) }
         pomo?.persistProgress(st)
-        pomodoro = pomo?.state ?? PomodoroState()
-        pomodoroRemaining = pomo?.remaining(st) ?? 0
+        synchronizePomodoroUI()
         let breakActive = pomo?.isBreakActive ?? false
         if breakActive != lastBreakActive { lastBreakActive = breakActive; send(.pomodoroBreak(breakActive)) }
         refresh()
@@ -180,13 +248,32 @@ final class AppModel: ObservableObject {
         now = Self.wallNow()
         guard let calc = calculator, let ledger else { return }
         status = engine?.liveStatus()
-        evaluateAfterHoursPrompt()
         let d = calc.schedule.localDate(now)
         today = calc.day(d, now: now)
         week = calc.week(containing: d, now: now)
         reviews = ledger.reviews(status: .pending)
+        let activityDate = selectedActivityDate ?? d
+        activityDay = activityDate == d ? today : calc.day(activityDate, now: now)
+        do {
+            activityBlocks = try calc.blocks(in: calc.schedule.daySpan(activityDate))
+            blockCorrections = try ledger.adjustments(in: calc.schedule.daySpan(activityDate))
+        } catch {
+            activityBlocks = []
+            blockCorrections = []
+            health.storageOK = false
+            health.messages = ["Activity could not be loaded: \(error)"]
+        }
+        if menuIsVisible {
+            menuHours = SnapshotBuilder.hourlyBuckets(calc: calc, day: d)
+        }
+        if let error = ledger.accountingError {
+            health.storageOK = false
+            health.messages = [error]
+        }
         paused = engine?.isTrackingPaused ?? false
         learning = engine?.isLearning ?? false
+        manualMode = engine?.manualMode
+        scheduledMode = engine?.scheduledCategory(at: now) ?? (calc.schedule.inWorkWindow(now) ? .work : .privateTime)
         evaluateAlerts(calc: calc, date: d)
         if now - lastSnapshot > 30_000 { publishSnapshot(); lastSnapshot = now }
     }
@@ -199,6 +286,7 @@ final class AppModel: ObservableObject {
         h.trackingPaused = paused
         do {
             let snapshot = SnapshotBuilder.build(calc: calc, now: now, health: h, status: status?.category.title ?? "Stopped")
+            guard ledger?.accountingError == nil else { throw SQLiteError.invalid(ledger?.accountingError ?? "Accounting unavailable") }
             try snapshots.publish(snapshot)
             try SnapshotStore.sharedContainer().publish(snapshot)
             if let widgetPublishError { health.messages.removeAll { $0 == widgetPublishError } }
@@ -246,17 +334,6 @@ final class AppModel: ObservableObject {
         let center = UNUserNotificationCenter.current()
         center.delegate = notificationHandler
         center.setNotificationCategories([category])
-    }
-
-    private func evaluateAfterHoursPrompt() {
-        let isPrompting = status?.outsidePrompt == true
-        if isPrompting && !lastOutsidePrompt {
-            notify(title: "What are you doing?",
-                   body: "You’re active outside your working hours. Is this Work, Learn or Private time?",
-                   id: "after-hours-\(status?.since ?? now)",
-                   category: "AFTER_HOURS")
-        }
-        lastOutsidePrompt = isPrompting
     }
 
     func requestNotificationAuthorization() {
@@ -362,17 +439,32 @@ final class AppModel: ObservableObject {
         }
     }
 
-    private func autoPausePomodoro() { if let p = pomo { p.autoPause(stamp()); pomodoro = p.state } }
-    func pomodoroStartFocus() { pomo?.startFocus(stamp()); tick() }
-    func pomodoroStartBreak() { pomo?.startBreak(stamp()); tick() }
-    func pomodoroPause() { pomo?.pause(stamp()); tick() }
-    func pomodoroResume() { pomo?.resume(stamp()); tick() }
-    func pomodoroEnd() { pomo?.skipOrEnd(stamp()); tick() }
+    private func synchronizePomodoroUI() {
+        let state = pomo?.state ?? PomodoroState()
+        if pomodoro != state { pomodoro = state }
+        pomodoroDisplay.synchronize(with: pomo)
+    }
+
+    private func autoPausePomodoro() {
+        pomo?.autoPause(stamp())
+        synchronizePomodoroUI()
+    }
+    func pomodoroToggle() { pomo?.toggle(stamp()); tick() }
+    func pomodoroReset() { pomo?.reset(stamp()); tick() }
+
+    var pomodoroFocusMinutes: Int { pomo?.settings.focusMinutes ?? PomodoroSettings().focusMinutes }
+
+    func setPomodoroFocusMinutes(_ minutes: Int) {
+        pomo?.setFocusMinutes(minutes)
+        objectWillChange.send()
+        synchronizePomodoroUI()
+    }
 
     // MARK: Tracking controls
 
     func togglePause() { send(paused ? .resume : .pause); refresh() }
     func toggleLearning() { send(.learning(!learning)); refresh() }
+    func resumeAutomaticMode() { send(.automaticMode); refresh() }
     func answerOutside(_ a: OutsideAnswer) {
         send(.answerOutside(a))
         UNUserNotificationCenter.current().removeDeliveredNotifications(withIdentifiers: ["after-hours-\(status?.since ?? now)"])
@@ -410,19 +502,64 @@ final class AppModel: ObservableObject {
 
     func reclassify(_ span: Span, as c: WorkTimerCore.Category, note: String) {
         guard let ledger else { return }
-        _ = try? ReviewResolver(ledger: ledger).reclassify(span, as: c, note: note, now: Self.wallNow())
+        do {
+            _ = try ReviewResolver(ledger: ledger).reclassify(span, as: c, note: note, now: Self.wallNow())
+            reviewError = nil
+        } catch { reviewError = "Could not correct this block: \(error)" }
         refresh()
     }
 
-    func addManualWork(_ span: Span, note: String) {
-        guard let ledger else { return }
-        _ = try? ReviewResolver(ledger: ledger).addManualWork(span, note: note, now: Self.wallNow())
+    func selectActivityDay(_ date: LocalDate?) {
+        guard let schedule = calculator?.schedule else { reviewError = "Storage is unavailable."; return }
+        let today = schedule.localDate(Self.wallNow())
+        if let date, date > today { reviewError = "Choose today or an earlier date."; return }
+        selectedActivityDate = date == today ? nil : date
+        reviewError = nil
         refresh()
+    }
+
+    func setMenuVisible(_ visible: Bool) {
+        menuIsVisible = visible
+        if visible { refresh() }
+    }
+
+    @discardableResult
+    func reclassifyBlocks(_ ids: Set<Millis>, as category: WorkTimerCore.Category) -> Bool {
+        guard let ledger else { reviewError = "Storage is unavailable."; return false }
+        let blocks = activityBlocks.filter { ids.contains($0.id) }
+        guard !ids.isEmpty, blocks.count == ids.count else {
+            reviewError = "The selection changed. Select the blocks again."
+            return false
+        }
+        do {
+            try ReviewResolver(ledger: ledger).reclassify(blocks.map(\.span), as: category,
+                                                        note: "Bulk block correction", now: Self.wallNow())
+            reviewError = nil
+            refresh()
+            return true
+        } catch {
+            reviewError = "Could not correct the selected blocks: \(error)"
+            return false
+        }
+    }
+
+    @discardableResult
+    func addManualEntry(_ span: Span, as category: WorkTimerCore.Category, note: String) -> Bool {
+        guard let ledger else { reviewError = "Storage is unavailable."; return false }
+        do {
+            _ = try ReviewResolver(ledger: ledger).addManualEntry(span, as: category, note: note, now: Self.wallNow())
+            reviewError = nil
+        } catch { reviewError = "Could not add manual time: \(error)"; return false }
+        refresh()
+        return true
     }
 
     func undo(_ id: Int64) {
         guard let ledger else { return }
-        try? ReviewResolver(ledger: ledger).undo(adjustmentID: id, now: Self.wallNow())
+        do {
+            try ReviewResolver(ledger: ledger).undo(adjustmentID: id, now: Self.wallNow())
+            reviewError = nil
+        } catch { reviewError = "Could not undo correction: \(error)" }
         refresh()
     }
 
@@ -430,6 +567,7 @@ final class AppModel: ObservableObject {
 
     func backup(to url: URL) throws {
         guard let ledger, let location else { return }
+        try engine?.checkpointNow(at: stamp())
         try BackupManager(ledger: ledger, location: location).createBackup(to: url)
     }
 
@@ -437,8 +575,15 @@ final class AppModel: ObservableObject {
         guard let ledger, let location else { return }
         ingestionSuspended = true
         defer { ingestionSuspended = false }
+        try engine?.checkpointNow(at: stamp())
         try BackupManager(ledger: ledger, location: location).restore(from: url)
-        engine?.reloadConfiguration()
+        let replacement = TrackingEngine(ledger: ledger)
+        try replacement.recover(now: Self.wallNow())
+        let app = NSWorkspace.shared.frontmostApplication?.bundleIdentifier
+        try replacement.handle(.launch(app: app, idleSeconds: Self.idleSeconds()), at: stamp())
+        engine = replacement
+        pomo = PomodoroTimer(ledger: ledger)
+        pomo?.recover(at: Self.wallNow())
         publishSnapshot()
         refresh()
     }
@@ -454,15 +599,27 @@ final class AppModel: ObservableObject {
     }
 
     func deleteAllHistory() {
-        try? ledger?.deleteAllHistory()
+        guard let ledger else { return }
+        do {
+            try ledger.deleteAllHistory()
+            let replacement = TrackingEngine(ledger: ledger)
+            try replacement.handle(.launch(app: NSWorkspace.shared.frontmostApplication?.bundleIdentifier, idleSeconds: Self.idleSeconds()), at: stamp())
+            engine = replacement
+        } catch {
+            health.storageOK = false
+            health.messages = ["History could not be deleted: \(error)"]
+            return
+        }
         inbox?.clear()
         snapshots?.delete()
         publishSnapshot(); refresh()
     }
 
-    func exportCSV(range: ClosedRange<LocalDate>, timeline: Bool) -> String {
-        guard let calc = calculator else { return "" }
-        return timeline ? CSV.timeline(calc, range: range) : CSV.summary(calc, range: range, now: now)
+    func exportCSV(range: ClosedRange<LocalDate>, timeline: Bool) throws -> String {
+        guard let calc = calculator else { throw SQLiteError.invalid("Storage unavailable") }
+        let csv = try timeline ? CSV.timeline(calc, range: range) : CSV.summary(calc, range: range, now: now)
+        if let error = ledger?.accountingError { throw SQLiteError.invalid(error) }
+        return csv
     }
 
     func revealDataFolder() {
@@ -487,10 +644,9 @@ final class AppModel: ObservableObject {
     func currentSchedule() -> Schedule? { ledger?.schedule() }
 }
 
-/// Real implementation of the post-update steps: migrate with a backup, republish widget data, reload widget timelines.
+/// Republishes widget data and reloads widget timelines after launch and updates.
 struct AppUpdateSteps: UpdateSteps {
     let model: AppModel
-    func backupAndMigrate() throws {}  // Ledger.init already backs up and migrates before this runs.
     func republishWidgetSnapshot() throws { DispatchQueue.main.async { Task { @MainActor in model.publishSnapshot() } } }
     func reloadWidgets() { WidgetCenter.shared.reloadAllTimelines() }
 }

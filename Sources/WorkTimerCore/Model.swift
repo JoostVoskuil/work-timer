@@ -54,7 +54,7 @@ public enum Category: String, Codable, CaseIterable {
 }
 
 public enum Reason: String, Codable {
-    case workWindow, workRule, privateRule, privateBrowsing
+    case workWindow, workRule, privateRule, learnRule, privateBrowsing
     case outsideHours, outsideHoursWork, outsideHoursPrivate
     case learning, outsideHoursLearn
     case idleTimeout, pomodoroBreak
@@ -62,12 +62,14 @@ public enum Reason: String, Codable {
     case appNotRunning, clockJump, suspension
     case browserUnknown
     case correction, manualEntry
+    case manualMode
 
     public var explanation: String {
         switch self {
         case .workWindow: return "Inside the weekday work window"
         case .workRule: return "Matched a work rule"
         case .privateRule: return "Matched a private rule"
+        case .learnRule: return "Matched a learn rule"
         case .privateBrowsing: return "Private browsing (no domain stored)"
         case .outsideHours: return "Outside work hours, awaiting your answer"
         case .outsideHoursWork: return "Outside work hours, you answered Work"
@@ -86,13 +88,14 @@ public enum Reason: String, Codable {
         case .browserUnknown: return "Safari website unknown"
         case .correction: return "Manual correction"
         case .manualEntry: return "Manual entry"
+        case .manualMode: return "Mode you selected in the menu"
         }
     }
 
-    /// Captured reasons that need the user's attention.
+    /// Only substantial unknown periods can qualify for Review; the ledger applies the duration threshold.
     public var needsReview: Bool {
         switch self {
-        case .outsideHours, .idleTimeout, .appNotRunning, .clockJump, .suspension, .browserUnknown: return true
+        case .appNotRunning, .clockJump, .suspension, .browserUnknown: return true
         default: return false
         }
     }
@@ -106,11 +109,27 @@ public struct ActivityInterval: Equatable, Codable {
     public var app: String?
     public var domain: String?
     public var source: String
+    public var apps: [String]
 
     public init(id: Int64? = nil, span: Span, category: Category, reason: Reason,
-                app: String? = nil, domain: String? = nil, source: String = "tracker") {
+                app: String? = nil, domain: String? = nil, source: String = "tracker", apps: [String] = []) {
         self.id = id; self.span = span; self.category = category; self.reason = reason
         self.app = app; self.domain = domain; self.source = source
+        self.apps = Array(Set(apps)).sorted()
+    }
+
+    private enum CodingKeys: String, CodingKey { case id, span, category, reason, app, domain, source, apps }
+
+    public init(from decoder: Decoder) throws {
+        let values = try decoder.container(keyedBy: CodingKeys.self)
+        id = try values.decodeIfPresent(Int64.self, forKey: .id)
+        span = try values.decode(Span.self, forKey: .span)
+        category = try values.decode(Category.self, forKey: .category)
+        reason = try values.decode(Reason.self, forKey: .reason)
+        app = try values.decodeIfPresent(String.self, forKey: .app)
+        domain = try values.decodeIfPresent(String.self, forKey: .domain)
+        source = try values.decode(String.self, forKey: .source)
+        apps = try values.decodeIfPresent([String].self, forKey: .apps) ?? []
     }
 }
 
@@ -158,10 +177,16 @@ public struct ClassificationRule: Equatable, Codable {
     public var id: Int64?
     public var kind: RuleKind
     public var pattern: String
-    public var isWork: Bool
+    /// Work, Learn or Private.
+    public var category: Category
     public var note: String
+    public var isWork: Bool { category == .work }
+    public init(id: Int64? = nil, kind: RuleKind, pattern: String, category: Category, note: String = "") {
+        self.id = id; self.kind = kind; self.pattern = pattern; self.note = note
+        self.category = [.work, .learn].contains(category) ? category : .privateTime
+    }
     public init(id: Int64? = nil, kind: RuleKind, pattern: String, isWork: Bool, note: String = "") {
-        self.id = id; self.kind = kind; self.pattern = pattern; self.isWork = isWork; self.note = note
+        self.init(id: id, kind: kind, pattern: pattern, category: isWork ? .work : .privateTime, note: note)
     }
 }
 

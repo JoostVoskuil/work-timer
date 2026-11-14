@@ -32,15 +32,16 @@ public struct BackupManager {
         do { db = try SQLiteDB(path: url.path, readOnly: true) } catch { throw BackupError.invalid("Not a readable SQLite file") }
         guard (try? db.integrityCheck()) == true else { throw BackupError.invalid("Integrity check failed") }
         let v = db.userVersion
-        guard v >= 1, v <= Ledger.schemaVersion else { throw BackupError.invalid("Unsupported schema version \(v)") }
-        guard (try? db.scalar("SELECT COUNT(*) FROM activity_intervals")) != nil else { throw BackupError.invalid("Not a WorkTimer backup") }
-        let count = Int((try? db.scalar("SELECT COUNT(*) FROM activity_intervals")) ?? 0)
+        guard v == Ledger.schemaVersion else {
+            throw BackupError.invalid("Unsupported backup schema \(v). Only current-format block backups can be restored; legacy backups must first be converted with the earlier WorkTimer version.")
+        }
+        let count = Int(try db.scalar("SELECT COUNT(*) FROM activity_blocks") ?? 0)
         return BackupInfo(schemaVersion: v, intervalCount: count,
-                          firstStart: (try? db.scalar("SELECT MIN(start_ms) FROM activity_intervals")) ?? nil,
-                          lastEnd: (try? db.scalar("SELECT MAX(end_ms) FROM activity_intervals")) ?? nil)
+                          firstStart: try db.scalar("SELECT MIN(start_ms) FROM activity_blocks"),
+                          lastEnd: try db.scalar("SELECT MAX(end_ms) FROM activity_blocks"))
     }
 
-    /// Validate, migrate a scratch copy, preserve the current database, then replace it. Any failure leaves current data intact.
+    /// Validate a scratch copy, preserve the current database, then replace it. No format conversion is performed.
     /// The caller must suspend ingestion first and rebuild summaries afterwards.
     public func restore(from url: URL, now: Date = Date()) throws {
         _ = try inspect(url)
@@ -48,9 +49,9 @@ public struct BackupManager {
         defer { for suffix in ["", "-wal", "-shm"] { try? FileManager.default.removeItem(atPath: scratch.path + suffix) } }
         let src = try SQLiteDB(path: url.path, readOnly: true)
         try src.backup(to: scratch.path)
-        do { _ = try Ledger(path: scratch.path) } catch { throw BackupError.invalid("Backup failed migration: \(error)") }
+        do { _ = try Ledger(path: scratch.path) } catch { throw BackupError.invalid("Backup validation failed: \(error)") }
 
-        try? FileManager.default.createDirectory(at: location.backupsDirectory, withIntermediateDirectories: true)
+        try FileManager.default.createDirectory(at: location.backupsDirectory, withIntermediateDirectories: true)
         let stamp = Int(now.timeIntervalSince1970)
         try ledger.db.backup(to: location.backupsDirectory.appendingPathComponent("pre-restore-\(stamp).sqlite").path)
         try ledger.db.restore(from: scratch.path)

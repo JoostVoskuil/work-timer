@@ -27,10 +27,8 @@ public struct ReviewResolver {
             for (span, answer) in pieces {
                 guard let cut = span.intersection(range) else { continue }
                 guard let cat = answer.category else { kept = true; continue }
-                // A late outside-hours answer only affects the still-pending part; private-domain and break exclusions stay.
-                if review.type == .outsideHours, cat == .work || cat == .learn || cat == .privateTime {
-                    try ledger.reclassify(span: cut, fromReason: .outsideHours, to: cat, reason: cat == .work ? .outsideHoursWork : cat == .learn ? .outsideHoursLearn : .outsideHoursPrivate)
-                    continue
+                guard review.type == .gap, cut == range else {
+                    throw SQLiteError.invalid("Answer the complete tracking gap. Other time can be corrected by five-minute block.")
                 }
                 try ledger.addAdjustment(Adjustment(span: cut, category: cat, note: "Review answer", createdAt: now, reviewID: id))
             }
@@ -46,13 +44,41 @@ public struct ReviewResolver {
     /// Manual correction of any selected interval or part of it.
     @discardableResult
     public func reclassify(_ span: Span, as category: Category, note: String, now: Millis) throws -> Int64 {
-        try ledger.addAdjustment(Adjustment(span: span, category: category, note: note, createdAt: now))
+        guard span.end <= ActivityBlock.floor(now) else { throw SQLiteError.invalid("Wait for this five-minute block to finish before correcting it.") }
+        let category = category == .idle ? Category.away : category
+        if category == .away {
+            let schedule = ledger.schedule()
+            let blocks = try ledger.effectiveBlocks(in: span)
+            guard blocks.allSatisfy({ block in
+                block.coverage.allSatisfy { coverage in
+                    schedule.workingSpans(in: coverage).reduce(0) { $0 + $1.length } == coverage.length
+                }
+            }) else { throw SQLiteError.invalid("Away time can only be assigned within scheduled working hours.") }
+        }
+        return try ledger.addAdjustment(Adjustment(span: span, category: category, note: note, createdAt: now))
     }
 
-    /// Manual entry for work done away from the Mac.
     @discardableResult
-    public func addManualWork(_ span: Span, note: String, now: Millis) throws -> Int64 {
-        try ledger.addAdjustment(Adjustment(span: span, category: .work, kind: .manual, note: note, createdAt: now))
+    public func reclassify(_ spans: [Span], as category: Category, note: String, now: Millis) throws -> [Int64] {
+        guard !spans.isEmpty, spans.allSatisfy({ $0.length == ActivityBlock.length }) else {
+            throw SQLiteError.invalid("Select one or more five-minute blocks.")
+        }
+        return try ledger.db.transaction {
+            try Set(spans).sorted { $0.start < $1.start }.map {
+                try reclassify($0, as: category, note: note, now: now)
+            }
+        }
+    }
+
+    /// Manual entry for a period; it replaces every recorded block in the range and can be undone.
+    @discardableResult
+    public func addManualEntry(_ span: Span, as category: Category, note: String, now: Millis) throws -> Int64 {
+        guard span.end <= ActivityBlock.floor(now), span.start == ActivityBlock.floor(span.start),
+              span.end == ActivityBlock.floor(span.end) else { throw SQLiteError.invalid("Choose completed five-minute boundaries for a manual entry.") }
+        guard [.work, .learn, .privateTime, .breakTime].contains(category) else {
+            throw SQLiteError.invalid("Choose Work, Learn, Private or Break for a manual entry.")
+        }
+        return try ledger.addAdjustment(Adjustment(span: span, category: category, kind: .manual, note: note, createdAt: now))
     }
 
     public func undo(adjustmentID: Int64, now: Millis) throws { try ledger.undoAdjustment(id: adjustmentID, at: now) }

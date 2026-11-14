@@ -24,19 +24,18 @@ public enum CSV {
         return lines.joined(separator: "\n") + "\n"
     }
 
-    /// Effective timeline rows (after corrections) with classification, reason and pending status.
-    public static func timeline(_ calc: ReportCalculator, range: ClosedRange<LocalDate>) -> String {
+    /// One credited category per five-minute block, without switch history.
+    public static func timeline(_ calc: ReportCalculator, range: ClosedRange<LocalDate>) throws -> String {
         let span = Span(calc.schedule.startOfDay(range.lowerBound), calc.schedule.startOfDay(calc.schedule.addDays(range.upperBound, 1)))
         let f = ISO8601DateFormatter()
         f.timeZone = calc.schedule.timeZone
         f.formatOptions = [.withInternetDateTime, .withFractionalSeconds, .withTimeZone]
-        var lines = ["start,end,time_zone,duration_s,classification,reason,source,pending,app,domain"]
-        for s in calc.segments(in: span) {
-            let src: String
-            switch s.source { case .captured: src = "captured"; case .live: src = "live"; case .correction: src = "correction"; case .manual: src = "manual" }
-            lines.append([f.string(from: Date(millis: s.span.start)), f.string(from: Date(millis: s.span.end)), calc.schedule.timeZone.identifier,
-                          String(format: "%.3f", Double(s.span.length) / 1000), s.category.rawValue, s.explanation, src, s.pending ? "pending" : "",
-                          s.app ?? "", s.domain ?? ""].map(escape).joined(separator: ","))
+        var lines = ["block_start,block_end,time_zone,observed_s,work_s,learn_s,private_s,break_s,away_s,unknown_s,pending_s"]
+        func seconds(_ millis: Millis) -> String { String(format: "%.3f", Double(millis) / 1000) }
+        for block in try calc.blocks(in: span) {
+            lines.append(([f.string(from: Date(millis: block.span.start)), f.string(from: Date(millis: block.span.end)), calc.schedule.timeZone.identifier,
+                           seconds(block.observed)] + [Category.work, .learn, .privateTime, .breakTime, .away, .gap].map { seconds(block[$0]) }
+                          + [seconds(calc.pending(in: block))]).map(escape).joined(separator: ","))
         }
         return lines.joined(separator: "\n") + "\n"
     }

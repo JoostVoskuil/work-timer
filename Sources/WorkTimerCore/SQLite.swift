@@ -2,10 +2,10 @@ import Foundation
 import SQLite3
 
 public enum SQLiteError: Error, CustomStringConvertible {
-    case open(String), prepare(String), step(String), constraint(String), migration(String), invalid(String)
+    case open(String), prepare(String), step(String), constraint(String), invalid(String)
     public var description: String {
         switch self {
-        case .open(let m), .prepare(let m), .step(let m), .constraint(let m), .migration(let m), .invalid(let m): return m
+        case .open(let m), .prepare(let m), .step(let m), .constraint(let m), .invalid(let m): return m
         }
     }
 }

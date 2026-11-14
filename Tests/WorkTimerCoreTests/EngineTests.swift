@@ -16,7 +16,7 @@ private final class Rig {
     var mono = 0.0
     init() throws {
         try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
-        ledger = try Ledger(path: dir.appendingPathComponent("t.sqlite").path, backupsDirectory: dir.appendingPathComponent("b"))
+        ledger = try Ledger(path: dir.appendingPathComponent("t.sqlite").path)
         try ledger.setReportingTimeZone(tz)
         engine = TrackingEngine(ledger: ledger)
     }
@@ -25,9 +25,9 @@ private final class Rig {
         mono = Double(t) / 1000
         _ = try engine.handle(e, at: Stamp(wall: t, mono: mono))
     }
-    func calc(now: Millis) -> ReportCalculator { ReportCalculator(ledger: ledger, live: { [engine] in engine.liveInterval(now: now) }) }
+    func calc(now: Millis) -> ReportCalculator { ReportCalculator(ledger: ledger, liveBlocks: { [engine] in engine.liveIntervals(now: now) }) }
     func total(_ cat: WorkTimerCore.Category, _ day: LocalDate, now: Millis) -> Millis {
-        ReportCalculator(ledger: ledger, live: { [engine] in engine.liveInterval(now: now) }).day(day, now: now).byCategory[cat] ?? 0
+        calc(now: now).day(day, now: now).byCategory[cat] ?? 0
     }
 }
 
@@ -86,10 +86,61 @@ private final class Rig {
         try r.send(.answerOutside(.learn), start + 10 * Duration.minute)
         try r.send(.tick, start + 20 * Duration.minute)
         let summary = r.calc(now: start + 20 * Duration.minute).day(fri, now: start + 20 * Duration.minute)
-        #expect(summary.learn == 20 * Duration.minute)
+        #expect(summary.learn == 10 * Duration.minute)
+        #expect(summary.personal == 10 * Duration.minute)
         #expect(summary.work == 0)
         #expect(summary.pending == 0)
         #expect(r.ledger.reviews(status: .pending).isEmpty)
+    }
+
+    @Test func manualModeAppliesImmediatelyAndOverridesRules() throws {
+        let r = try Rig()
+        let t = at(2025, 6, 13, 10)
+        try r.ledger.upsertRule(ClassificationRule(kind: .app, pattern: "com.microsoft.outlook", isWork: true))
+        r.engine.reloadConfiguration()
+        try r.send(.launch(app: "com.microsoft.outlook", idleSeconds: 0), t)
+        #expect(r.engine.liveStatus()?.category == .work)
+        #expect(r.engine.manualMode == nil)
+        #expect(r.engine.scheduledCategory(at: t) == .work)
+        for (answer, category) in [(OutsideAnswer.private, WorkTimerCore.Category.privateTime), (.learn, .learn), (.work, .work)] {
+            try r.send(.answerOutside(answer), t + Duration.minute)
+            #expect(r.engine.liveStatus()?.category == category)
+            #expect(r.engine.liveStatus()?.reason == .manualMode)
+            #expect(r.engine.manualMode == category)
+        }
+        try r.send(.automaticMode, t + 2 * Duration.minute)
+        #expect(r.engine.manualMode == nil)
+        #expect(r.engine.liveStatus()?.reason == .workRule)
+    }
+
+    @Test func learnRulesPersistAndClassifyAsLearn() throws {
+        let r = try Rig()
+        try r.ledger.upsertRule(ClassificationRule(kind: .app, pattern: "com.apple.iBooksX", category: .learn))
+        #expect(r.ledger.rules().first { $0.pattern == "com.apple.ibooksx" }?.category == .learn)
+        r.engine.reloadConfiguration()
+        let t = at(2025, 6, 13, 10)
+        try r.send(.launch(app: "com.apple.iBooksX", idleSeconds: 0), t)
+        #expect(r.engine.liveStatus()?.category == .learn)
+        #expect(r.engine.liveStatus()?.reason == .learnRule)
+        let rs = RuleSet([ClassificationRule(kind: .domain, pattern: "x.com", category: .work),
+                          ClassificationRule(kind: .domain, pattern: "docs.x.com", category: .learn)])
+        #expect(rs.decide(app: nil, domain: "docs.x.com")?.category == .learn)
+    }
+
+    @Test func manualModeSurvivesIdleAndLockButEndsAtWorkWindowBoundary() throws {
+        let r = try Rig()
+        try r.send(.launch(app: "a", idleSeconds: 0), at(2025, 6, 13, 16))
+        try r.send(.answerOutside(.private), at(2025, 6, 13, 16))
+        try r.send(.idleSample(seconds: 400), at(2025, 6, 13, 16, 10))
+        try r.send(.idleSample(seconds: 0), at(2025, 6, 13, 16, 11))
+        try r.send(.lock, at(2025, 6, 13, 16, 12))
+        try r.send(.unlock, at(2025, 6, 13, 16, 13))
+        #expect(r.engine.manualMode == .privateTime)
+        #expect(r.engine.liveStatus()?.category == .privateTime)
+        try r.send(.tick, at(2025, 6, 13, 17, 10))
+        #expect(r.engine.manualMode == nil)
+        #expect(r.engine.liveStatus()?.category == .privateTime)
+        #expect(r.engine.liveStatus()?.reason == .outsideHoursPrivate)
     }
 
     @Test func sleepAndLockAreOmittedOutsideWorkHours() throws {
@@ -102,7 +153,7 @@ private final class Rig {
             try r.send(.tick, end)
             #expect(r.engine.liveStatus() == nil)
             #expect(r.engine.liveInterval(now: end) == nil)
-            #expect(try r.ledger.intervals(in: Span(start, end)).isEmpty)
+            #expect(try r.calc(now: end).blocks(in: Span(start, end)).isEmpty)
         }
     }
 
@@ -114,20 +165,22 @@ private final class Rig {
             try r.send(.launch(app: "a", idleSeconds: 0), start)
             try r.send(unavailable, start)
             try r.send(.tick, end)
-            let intervals = try r.ledger.intervals(in: Span(start, end))
-            #expect(intervals.count == 1)
-            #expect(intervals.first?.category == .away)
-            #expect(intervals.first?.span == Span(at(2025, 6, 13, 7), at(2025, 6, 13, 17)))
+            let blocks = try r.calc(now: end).blocks(in: Span(start, end))
+            #expect(blocks.reduce(0) { $0 + $1[.away] } == 10 * Duration.hour)
+            #expect(blocks.first?.span.start == at(2025, 6, 13, 7))
+            #expect(blocks.last?.span.end == at(2025, 6, 13, 17))
             #expect(r.total(.work, fri, now: end) == 0)
         }
     }
 
-    @Test func unlockingOutsideHoursResumesOutsidePrompt() throws {
+    @Test func unlockingOutsideHoursResumesPrivateWithoutReview() throws {
         let r = try Rig()
         try r.send(.launch(app: "a", idleSeconds: 0), at(2025, 6, 13, 18))
         try r.send(.lock, at(2025, 6, 13, 18))
         try r.send(.unlock, at(2025, 6, 13, 19))
-        #expect(r.engine.liveStatus()?.outsidePrompt == true)
+        #expect(r.engine.liveStatus()?.outsidePrompt == false)
+        #expect(r.engine.liveStatus()?.category == .privateTime)
+        #expect(r.ledger.reviews(status: .pending).isEmpty)
         #expect(r.engine.liveStatus()?.since == at(2025, 6, 13, 19))
     }
 
@@ -149,21 +202,19 @@ private final class Rig {
         var t = t0
         while t < t0 + 20 * Duration.minute { t += 5_000; try r.send(.idleSample(seconds: Double(t - t0) / 1000), t) }
         let now = t0 + 20 * Duration.minute
-        #expect(r.total(.idle, fri, now: now) == 20 * Duration.minute)
+        #expect(r.total(.away, fri, now: now) == 20 * Duration.minute)
         #expect(r.total(.work, fri, now: now) == 0)
     }
 
-    @Test func idleReviewRetainsForegroundAppContext() throws {
+    @Test func idleDefaultsToAwayWithoutReviewOrAppContext() throws {
         let r = try Rig()
         let start = at(2025, 6, 13, 10)
         try r.send(.launch(app: "com.apple.Xcode", idleSeconds: 0), start)
         try r.send(.idleSample(seconds: 600), start + 10 * Duration.minute)
         try r.send(.idleSample(seconds: 0), start + 20 * Duration.minute)
-        let review = try #require(r.ledger.reviews(status: .pending).first { $0.type == .idle })
-        let end = try #require(review.end)
-        let segments = r.calc(now: end).segments(in: Span(review.start, end))
-        #expect(!segments.isEmpty)
-        #expect(segments.allSatisfy { $0.app == "com.apple.Xcode" && $0.category == .idle })
+        #expect(r.ledger.reviews(status: .pending).isEmpty)
+        #expect(r.total(.away, fri, now: start + 20 * Duration.minute) == 20 * Duration.minute)
+        #expect(r.ledger.readCheckpoint()?.stateJSON.contains("com.apple.Xcode") == false)
     }
 
     @Test func idleReturnKeepsIdlePeriodAndResumesWork() throws {
@@ -174,7 +225,7 @@ private final class Rig {
         try r.send(.idleSample(seconds: 0), t0 + 1_200_000)
         try r.send(.tick, t0 + 1_800_000)
         let now = t0 + 1_800_000
-        #expect(r.total(.idle, fri, now: now) == 20 * Duration.minute)
+        #expect(r.total(.away, fri, now: now) == 20 * Duration.minute)
         #expect(r.total(.work, fri, now: now) == 10 * Duration.minute)
     }
 
@@ -199,14 +250,15 @@ private final class Rig {
         #expect(r.total(.work, fri, now: t0 + 5 * Duration.minute) < 5 * Duration.minute)
     }
 
-    @Test func outsideHoursIsPendingNotWork() throws {
+    @Test func outsideHoursIsConfirmedPrivateNotWork() throws {
         let r = try Rig()
         let t0 = at(2025, 6, 13, 16, 50)
         try r.send(.launch(app: "a", idleSeconds: 0), t0)
         try r.send(.tick, at(2025, 6, 13, 17, 20))
         let now = at(2025, 6, 13, 17, 20)
         #expect(r.total(.work, fri, now: now) == 10 * Duration.minute)
-        #expect(r.calc(now: now).day(fri, now: now).pending > 0)
+        #expect(r.calc(now: now).day(fri, now: now).pending == 0)
+        #expect(r.calc(now: now).day(fri, now: now).personal == 20 * Duration.minute)
     }
 
     @Test func outsideHoursAnsweredWorkKeepsLaterTimeOnly() throws {
@@ -216,21 +268,19 @@ private final class Rig {
         try r.send(.answerOutside(.work), at(2025, 6, 13, 17, 10))
         try r.send(.tick, at(2025, 6, 13, 17, 20))
         let now = at(2025, 6, 13, 17, 20)
-        #expect(r.total(.work, fri, now: now) == 30 * Duration.minute)
+        #expect(r.total(.work, fri, now: now) == 20 * Duration.minute)
         #expect(r.calc(now: now).day(fri, now: now).pending == 0)
     }
 
-    @Test func liveOutsideReviewCanBeAnsweredBeforeItEnds() throws {
+    @Test func explicitWorkDoesNotNeedAnOutsideReview() throws {
         let r = try Rig()
         try r.send(.launch(app: "a", idleSeconds: 0), at(2025, 6, 13, 18))
-        let review = try #require(r.ledger.reviews(status: .pending).first { $0.type == .outsideHours })
-        #expect(review.end == nil)
-        #expect(r.engine.pendingOutsideReviewID == review.id)
+        #expect(r.ledger.reviews(status: .pending).isEmpty)
         try r.send(.answerOutside(.work), at(2025, 6, 13, 18, 15))
         #expect(r.engine.pendingOutsideReviewID == nil)
         #expect(r.ledger.reviews(status: .pending).isEmpty)
         try r.send(.tick, at(2025, 6, 13, 18, 30))
-        #expect(r.total(.work, fri, now: at(2025, 6, 13, 18, 30)) == 30 * Duration.minute)
+        #expect(r.total(.work, fri, now: at(2025, 6, 13, 18, 30)) == 15 * Duration.minute)
     }
 
     @Test func weekendIsNotWork() throws {
@@ -254,7 +304,7 @@ private final class Rig {
         let t0 = at(2025, 6, 13, 9)
         try r.send(.launch(app: "a", idleSeconds: 0), t0)
         for i in 1...30 { try r.send(i % 3 == 0 ? .appActivated("b") : .tick, t0 + Millis(i) * 60_000) }
-        let iv = try r.ledger.intervals(in: Span(t0 - Duration.hour, t0 + Duration.hour * 2)).sorted { $0.span.start < $1.span.start }
+        let iv = try r.calc(now: t0 + 30 * Duration.minute).blocks(in: Span(t0 - Duration.hour, t0 + Duration.hour * 2))
         for (a, b) in zip(iv, iv.dropFirst()) { #expect(a.span.end <= b.span.start) }
     }
 
@@ -264,13 +314,13 @@ private final class Rig {
         try r.send(.tick, at(2025, 6, 13, 9, 30))
         let r2 = TrackingEngine(ledger: r.ledger)
         try r2.recover(now: at(2025, 6, 13, 11))
-        let calc = ReportCalculator(ledger: r.ledger, live: { r2.liveInterval(now: at(2025, 6, 13, 11)) })
-        let gaps = try r.ledger.intervals(in: Span(at(2025, 6, 13, 9), at(2025, 6, 13, 12))).filter { $0.reason == .appNotRunning }
+        let calc = ReportCalculator(ledger: r.ledger, liveBlocks: { r2.liveIntervals(now: at(2025, 6, 13, 11)) })
+        let gaps = try r.ledger.blocks(in: Span(at(2025, 6, 13, 9), at(2025, 6, 13, 12))).filter { $0[.gap] > 0 }
         #expect(!gaps.isEmpty)
         #expect(calc.day(fri, now: at(2025, 6, 13, 11)).work <= 31 * Duration.minute)
     }
 
-    @Test func restartingClosesOldLiveReviewsAtLastObservation() throws {
+    @Test func restartingOutsideHoursDoesNotCreateReviews() throws {
         let r = try Rig()
         let start = at(2025, 6, 13, 18)
         let observed = at(2025, 6, 13, 18, 10)
@@ -279,33 +329,28 @@ private final class Rig {
         try r.send(.tick, observed)
         let engine = TrackingEngine(ledger: r.ledger)
         try engine.recover(now: restarted)
-        let oldReview = try #require(r.ledger.reviews(status: .pending).first)
-        #expect(oldReview.start == start)
-        #expect(oldReview.end == observed)
+        #expect(r.ledger.reviews(status: .pending).isEmpty)
         _ = try engine.handle(.launch(app: "a", idleSeconds: 0), at: Stamp(wall: restarted, mono: Double(restarted) / 1000))
         let reviews = r.ledger.reviews(status: .pending).filter { $0.type == .outsideHours }
-        #expect(reviews.filter { $0.end == nil }.count == 1)
-        #expect(reviews.last?.start == restarted)
+        #expect(reviews.isEmpty)
     }
 
-    @Test func repairingHistoricalUnfinishedReviewsUsesOnlyTheirOwnEvidence() throws {
+    @Test func contiguousUnknownObservationsProduceOneGapReview() throws {
         let r = try Rig()
-        let first = at(2025, 6, 13, 18)
-        let second = at(2025, 6, 13, 19)
-        for start in [first, second] {
-            _ = try r.ledger.addReview(ReviewItem(type: .outsideHours, start: start, createdAt: start, dedupeKey: "outside:\(start)"))
-            _ = try r.ledger.append(ActivityInterval(span: Span(start, start + 10 * Duration.minute), category: .privateTime, reason: .outsideHours))
+        let first = at(2025, 6, 13, 10)
+        for i in 0..<20 {
+            let start = first + Millis(i) * Duration.minute
+            _ = try r.ledger.append(ActivityInterval(span: Span(start, start + Duration.minute), category: .gap, reason: .browserUnknown))
         }
-        try r.ledger.closeInterruptedOutsideReviews(observed: second + 20 * Duration.minute)
         let reviews = r.ledger.reviews(status: .pending)
-        #expect(reviews.map(\.end) == [first + 10 * Duration.minute, second + 10 * Duration.minute])
-        try r.ledger.closeInterruptedOutsideReviews(observed: second + Duration.hour)
-        #expect(r.ledger.reviews(status: .pending) == reviews)
+        #expect(reviews.count == 1)
+        #expect(reviews.first?.start == first)
+        #expect(reviews.first?.end == first + 20 * Duration.minute)
     }
 }
 
 @Suite struct WidgetGraphTests {
-    @Test func graphBucketsMatchCorrectedLiveReportsAndExcludeUnansweredPrivateTime() throws {
+    @Test func graphBucketsMatchCorrectedLiveReportsAndIncludeDefaultPrivateTime() throws {
         let r = try Rig()
         _ = try r.ledger.append(ActivityInterval(span: Span(at(2025, 6, 8, 9), at(2025, 6, 8, 11)), category: .work, reason: .workWindow))
         _ = try r.ledger.append(ActivityInterval(span: Span(at(2025, 6, 9, 9), at(2025, 6, 9, 10)), category: .learn, reason: .learning))
@@ -321,7 +366,7 @@ private final class Rig {
         let snapshot = SnapshotBuilder.build(calc: calc, now: now, health: HealthStatus(), status: "Work")
         let graph = try #require(snapshot.graphs)
         #expect(graph.hours.count == 24)
-        #expect(graph.hours[7].personal == 0)
+        #expect(graph.hours[7].personal == Duration.hour)
         #expect(graph.hours[8].work == 15 * Duration.minute)
         #expect(graph.hours[9].work == 30 * Duration.minute)
         #expect(graph.hours[9].learn == 30 * Duration.minute)
@@ -336,7 +381,7 @@ private final class Rig {
         #expect(graph.days.first?.start == at(2025, 6, 9, 0))
         #expect(graph.days.last?.end == at(2025, 6, 16, 0))
         #expect(graph.days.reduce(0) { $0 + $1.work } == 90 * Duration.minute)
-        #expect(graph.days.reduce(0) { $0 + $1.personal } == 45 * Duration.minute)
+        #expect(graph.days.reduce(0) { $0 + $1.personal } == 105 * Duration.minute)
         #expect(graph.days.reduce(0) { $0 + $1.learn } == 90 * Duration.minute)
         #expect(graph.days[4].work == snapshot.todayWork)
         #expect(graph.days[5].work + graph.days[6].work == 0)
@@ -411,10 +456,9 @@ private final class Rig {
 
     @Test func completedReviewCanBeClassifiedAsLearning() throws {
         let r = try Rig()
-        let start = at(2025, 6, 13, 18)
+        let start = at(2025, 6, 13, 10)
         let end = start + Duration.hour
-        _ = try r.ledger.append(ActivityInterval(span: Span(start, end), category: .privateTime, reason: .outsideHours))
-        _ = try r.ledger.addReview(ReviewItem(type: .outsideHours, start: start, end: end, createdAt: end, dedupeKey: "learn-review"))
+        _ = try r.ledger.append(ActivityInterval(span: Span(start, end), category: .gap, reason: .appNotRunning))
         let review = try #require(r.ledger.reviews(status: .pending).first)
         try ReviewResolver(ledger: r.ledger).resolve(review, as: .learn, now: end)
         #expect(r.calc(now: end).day(LocalDate(2025, 6, 13), now: end).learn == Duration.hour)
@@ -422,19 +466,15 @@ private final class Rig {
         #expect(r.ledger.reviews(status: .pending).isEmpty)
     }
 
-    @Test func personalTimeExcludesUnansweredAfterHoursAndRemainsSeparateFromWork() throws {
+    @Test func personalTimeIncludesOutsideHoursAndRemainsSeparateFromWork() throws {
         let r = try Rig()
         let start = at(2025, 6, 13, 18)
         _ = try r.ledger.append(ActivityInterval(span: Span(start, start + Duration.hour), category: .privateTime, reason: .privateRule))
         _ = try r.ledger.append(ActivityInterval(span: Span(start + Duration.hour, start + 2 * Duration.hour), category: .privateTime, reason: .outsideHours))
-        let id = try r.ledger.addReview(ReviewItem(type: .outsideHours, start: start + Duration.hour,
-                                                 end: start + 2 * Duration.hour, createdAt: start, dedupeKey: "personal-pending"))
         let now = start + 2 * Duration.hour
         let day = LocalDate(2025, 6, 13)
-        #expect(r.calc(now: now).day(day, now: now).personal == Duration.hour)
+        #expect(r.calc(now: now).day(day, now: now).personal == 2 * Duration.hour)
         #expect(r.calc(now: now).day(day, now: now).work == 0)
-        let review = try #require(r.ledger.reviews(status: .pending).first { $0.id == id })
-        try ReviewResolver(ledger: r.ledger).resolve(review, as: .privateTime, now: now)
         let summary = r.calc(now: now).day(day, now: now)
         #expect(summary.personal == 2 * Duration.hour)
         #expect(summary.pending == 0)
@@ -443,13 +483,14 @@ private final class Rig {
 
     @Test func unknownTimeWithoutReviewIsNotReportedAsPending() throws {
         let r = try Rig()
-        let span = Span(at(2025, 6, 13, 10), at(2025, 6, 13, 11))
+        let span = Span(at(2025, 6, 13, 10), at(2025, 6, 13, 10, 14))
         _ = try r.ledger.append(ActivityInterval(span: span, category: .gap, reason: .browserUnknown))
         let summary = r.calc(now: span.end).day(LocalDate(2025, 6, 13), now: span.end)
         #expect(r.ledger.reviews(status: .pending).isEmpty)
         #expect(summary.pending == 0)
         #expect(summary.work == 0)
-        #expect(summary.byCategory[.gap] == Duration.hour)
+        #expect(summary.byCategory[.gap] == 15 * Duration.minute)
+        #expect(try r.ledger.blocks(in: span).reduce(0) { $0 + $1[.gap] } == 14 * Duration.minute)
     }
 
     @Test func pendingTotalsAreClippedToUnansweredReviewRange() throws {
@@ -457,6 +498,9 @@ private final class Rig {
         let start = at(2025, 6, 13, 10)
         let end = start + Duration.hour
         _ = try r.ledger.append(ActivityInterval(span: Span(start, end), category: .gap, reason: .appNotRunning))
+        for existing in r.ledger.reviews(status: .pending) {
+            try r.ledger.resolveReview(id: existing.id!, resolution: "replaced test selection", at: end)
+        }
         let id = try r.ledger.addReview(ReviewItem(type: .gap, start: start + 10 * Duration.minute,
                                                  end: start + 30 * Duration.minute, createdAt: end, dedupeKey: "pending-gap"))
         let calc = r.calc(now: end)
@@ -468,18 +512,18 @@ private final class Rig {
         #expect(calc.day(LocalDate(2025, 6, 13), now: end).work == 0)
     }
 
-    @Test func reviewingIdleAsWorkIncludesPhoneCallWithoutRewritingEvidence() throws {
+    @Test func correctingAwayBlocksAsWorkIncludesPhoneCallAndSupportsUndo() throws {
         let r = try Rig()
         let start = at(2025, 6, 13, 10)
         let end = at(2025, 6, 13, 10, 30)
         let span = Span(start, end)
         _ = try r.ledger.append(ActivityInterval(span: span, category: .idle, reason: .idleTimeout))
-        let id = try r.ledger.addReview(ReviewItem(type: .idle, start: start, end: end, createdAt: end, dedupeKey: "test-idle"))
-        let review = try #require(r.ledger.reviews(status: .pending).first { $0.id == id })
-        try ReviewResolver(ledger: r.ledger).resolve(review, as: .work, now: end)
+        let id = try ReviewResolver(ledger: r.ledger).reclassify(span, as: .work, note: "Phone call", now: end)
         #expect(r.total(.work, LocalDate(2025, 6, 13), now: end) == 30 * Duration.minute)
         #expect(r.ledger.reviews(status: .pending).isEmpty)
-        #expect(try r.ledger.intervals(in: span).first?.category == .idle)
+        #expect(try r.ledger.blocks(in: span).reduce(0) { $0 + $1[.away] } == 30 * Duration.minute)
+        try ReviewResolver(ledger: r.ledger).undo(adjustmentID: id, now: end)
+        #expect(r.total(.away, LocalDate(2025, 6, 13), now: end) == 30 * Duration.minute)
     }
 
     @Test func weekToDateBalance() throws {
@@ -506,6 +550,57 @@ private final class Rig {
         #expect(r.total(.privateTime, LocalDate(2025, 6, 13), now: now) == Duration.hour)
     }
 
+    @Test func manualEntryReplacesRecordedBlocksWithChosenCategory() throws {
+        let r = try Rig()
+        let fri = LocalDate(2025, 6, 13)
+        let recorded = Span(at(2025, 6, 13, 9), at(2025, 6, 13, 10))
+        _ = try r.ledger.append(ActivityInterval(span: recorded, category: .work, reason: .workWindow, apps: ["com.apple.Xcode"]))
+        let entry = Span(at(2025, 6, 13, 9, 30), at(2025, 6, 13, 10, 30))
+        let now = at(2025, 6, 13, 12)
+        let id = try ReviewResolver(ledger: r.ledger).addManualEntry(entry, as: .learn, note: "Course", now: now)
+        #expect(r.total(.work, fri, now: now) == 30 * Duration.minute)
+        #expect(r.total(.learn, fri, now: now) == Duration.hour)
+        let replaced = try r.ledger.effectiveBlocks(in: entry)
+        #expect(replaced.count == 12)
+        #expect(replaced.allSatisfy { $0.amounts == [.learn: ActivityBlock.length] && $0.apps.isEmpty })
+        try ReviewResolver(ledger: r.ledger).undo(adjustmentID: id, now: now)
+        #expect(r.total(.work, fri, now: now) == Duration.hour)
+        #expect(r.total(.learn, fri, now: now) == 0)
+    }
+
+    @Test func pomodoroToggleStartsStopsContinuesAndAdvances() throws {
+        let r = try Rig()
+        let p = PomodoroTimer(ledger: r.ledger)
+        func st(_ seconds: Double) -> Stamp { Stamp(wall: Millis(seconds * 1000), mono: seconds) }
+        p.toggle(st(0))
+        #expect(p.state.status == .running && p.state.phase == .focus)
+        p.toggle(st(60))
+        #expect(p.state.status == .paused && p.remaining(st(500)) == 24 * Duration.minute)
+        p.toggle(st(500))
+        #expect(p.state.status == .running)
+        p.tick(st(500 + 24 * 60))
+        #expect(p.state.status == .waiting)
+        p.toggle(st(2000))
+        #expect(p.state.status == .running && p.state.phase == .shortBreak)
+        p.skipOrEnd(st(2010))
+        #expect(p.state.status == .stopped)
+    }
+
+    @Test func pomodoroResetReturnsToConfiguredFocusLength() throws {
+        let r = try Rig()
+        let p = PomodoroTimer(ledger: r.ledger)
+        func st(_ seconds: Double) -> Stamp { Stamp(wall: Millis(seconds * 1000), mono: seconds) }
+        #expect(p.remaining(st(0)) == 25 * Duration.minute)
+        p.toggle(st(0))
+        p.toggle(st(120))
+        p.reset(st(130))
+        #expect(p.state.status == .stopped && p.state.phase == .focus && p.state.completedFocus == 0)
+        #expect(p.remaining(st(130)) == 25 * Duration.minute)
+        p.setFocusMinutes(40)
+        #expect(p.remaining(st(130)) == 40 * Duration.minute)
+        #expect(PomodoroTimer(ledger: r.ledger).settings.focusMinutes == 40)
+    }
+
     @Test func alertsFireOncePerThreshold() throws {
         let r = try Rig()
         let wa = WorkAlerts(ledger: r.ledger)
@@ -527,7 +622,7 @@ private final class Rig {
         let r = try Rig()
         _ = try r.ledger.append(ActivityInterval(span: Span(at(2025, 6, 13, 9), at(2025, 6, 13, 10)), category: .work, reason: .workWindow))
         try r.ledger.deleteAllHistory()
-        #expect(try r.ledger.intervals(in: Span(0, Int64.max / 2)).isEmpty)
+        #expect(try r.ledger.blocks(in: Span(0, Int64.max / 2)).isEmpty)
     }
 }
 
@@ -542,7 +637,7 @@ private final class Rig {
         try mgr.createBackup(to: b)
         try r.ledger.deleteAllHistory()
         try mgr.restore(from: b)
-        #expect(try r.ledger.intervals(in: Span(0, Int64.max / 2)).count == 1)
+        #expect(try r.ledger.blocks(in: Span(0, Int64.max / 2)).count == 12)
     }
 
     @Test func invalidBackupRejected() throws {

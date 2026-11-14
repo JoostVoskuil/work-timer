@@ -124,9 +124,15 @@ public enum SnapshotBuilder {
                               }))
     }
 
-    private static func hourlyBuckets(calc: ReportCalculator, day: LocalDate) -> [WidgetGraphBucket] {
+    public static func hourlyBuckets(calc: ReportCalculator, day: LocalDate) -> [WidgetGraphBucket] {
         let span = calc.schedule.daySpan(day)
-        let segments = calc.segments(in: span)
+        let blocks: [ActivityBlock]
+        do { blocks = try calc.blocks(in: span) }
+        catch {
+            calc.ledger.accountingError = "Could not build widget graph: \(error)"
+            NSLog("%@", calc.ledger.accountingError!)
+            return []
+        }
         var start = span.start
         var buckets: [WidgetGraphBucket] = []
         while start < span.end {
@@ -135,11 +141,10 @@ public enum SnapshotBuilder {
             let end = min(span.end, hour.end.millis)
             let range = Span(start, end)
             var bucket = WidgetGraphBucket(start: start, end: end, work: 0, personal: 0, learn: 0)
-            for segment in segments {
-                guard let cut = segment.span.intersection(range) else { continue }
-                if segment.category == .work { bucket.work += cut.length }
-                if segment.isConfirmedPersonal { bucket.personal += cut.length }
-                if segment.category == .learn { bucket.learn += cut.length }
+            for block in blocks where block.span.overlaps(range) {
+                bucket.work += block[.work]
+                bucket.personal += block[.privateTime]
+                bucket.learn += block[.learn]
             }
             buckets.append(bucket)
             start = end

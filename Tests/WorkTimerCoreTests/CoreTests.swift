@@ -4,12 +4,11 @@ import Foundation
 
 final class Recorder: UpdateSteps {
     var calls: [String] = []
-    var failMigration = false
-    func backupAndMigrate() throws {
-        calls.append("migrate")
-        if failMigration { throw NSError(domain: "t", code: 1) }
+    var failPublication = false
+    func republishWidgetSnapshot() throws {
+        calls.append("publish")
+        if failPublication { throw NSError(domain: "t", code: 1) }
     }
-    func republishWidgetSnapshot() throws { calls.append("publish") }
     func reloadWidgets() { calls.append("reload") }
 }
 
@@ -34,21 +33,43 @@ final class Recorder: UpdateSteps {
         #expect(perms == 0o700)
     }
 
-    @Test func testUpdateMigratesAndReloadsOnce() throws {
+    @Test func singleInstanceLockRejectsDuplicateAndCanBeReacquired() throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let url = directory.appendingPathComponent("worktimer.lock")
+        var first: SingleInstanceLock? = try SingleInstanceLock(at: url)
+        #expect(throws: SingleInstanceError.self) { try SingleInstanceLock(at: url) }
+        withExtendedLifetime(first) {}
+        first = nil
+        let next = try SingleInstanceLock(at: url)
+        withExtendedLifetime(next) {
+            #expect(throws: SingleInstanceError.self) { try SingleInstanceLock(at: url) }
+        }
+        #expect(FileManager.default.fileExists(atPath: url.path))
+    }
+
+    @Test func singleInstanceLockSurfacesFileErrors() {
+        let missing = FileManager.default.temporaryDirectory
+            .appendingPathComponent(UUID().uuidString).appendingPathComponent("worktimer.lock")
+        #expect(throws: (any Error).self) { try SingleInstanceLock(at: missing) }
+    }
+
+    @Test func testUpdatePublishesAndReloadsWithoutMigration() throws {
         let r = Recorder()
         let c = PostUpdateCoordinator(defaults: defaults(), steps: r)
         #expect(try c.runOnLaunch(currentVersion: "1.1"))
-        #expect(r.calls == ["migrate", "publish", "reload"])
+        #expect(r.calls == ["publish", "reload"])
         r.calls = []
         #expect(try !c.runOnLaunch(currentVersion: "1.1"))
         #expect(r.calls == ["publish", "reload"])
     }
 
-    @Test func testFailedMigrationIsRetried() {
-        let r = Recorder(); r.failMigration = true
+    @Test func testFailedPublicationIsRetried() {
+        let r = Recorder(); r.failPublication = true
         let c = PostUpdateCoordinator(defaults: defaults(), steps: r)
         #expect(throws: (any Error).self) { try c.runOnLaunch(currentVersion: "2.0") }
-        r.failMigration = false
+        r.failPublication = false
         #expect((try? c.runOnLaunch(currentVersion: "2.0")) ?? false)
     }
 }

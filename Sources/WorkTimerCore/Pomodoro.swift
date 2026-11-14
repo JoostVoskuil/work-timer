@@ -41,8 +41,15 @@ public final class PomodoroTimer {
     private let ledger: Ledger
     private var anchorMono: Double = 0
 
+    public static let focusMinutesRange = 1...180
+    private static let focusMinutesKey = "pomodoro_focus_minutes"
+
     public init(ledger: Ledger, settings: PomodoroSettings = PomodoroSettings()) {
         self.ledger = ledger
+        var settings = settings
+        if let saved = ledger.getSetting(Self.focusMinutesKey).flatMap(Int.init), Self.focusMinutesRange.contains(saved) {
+            settings.focusMinutes = saved
+        }
         self.settings = settings
         if let json = ledger.getSetting("pomodoro_state"), let s = try? JSONDecoder().decode(PomodoroState.self, from: Data(json.utf8)) {
             state = s
@@ -65,7 +72,12 @@ public final class PomodoroTimer {
     public var nextBreak: PomodoroPhase { state.completedFocus >= settings.focusPhasesPerCycle ? .longBreak : .shortBreak }
 
     public func remaining(_ s: Stamp) -> Millis {
-        guard state.status == .running else { return state.status == .waiting ? 0 : state.remainingMs }
+        switch state.status {
+        case .stopped: return settings.planned(.focus)
+        case .waiting: return 0
+        case .paused: return state.remainingMs
+        case .running: break
+        }
         return max(0, state.remainingMs - Millis((s.mono - anchorMono) * 1000))
     }
 
@@ -103,6 +115,30 @@ public final class PomodoroTimer {
         state.status = .running
         state.deadline = s.wall + state.remainingMs
         persist()
+    }
+
+    /// Single Start/Stop control: starts focus, pauses or resumes, and after a finished phase starts the next one.
+    public func toggle(_ s: Stamp) {
+        switch state.status {
+        case .stopped: begin(.focus, s)
+        case .running: pause(s)
+        case .paused: resume(s)
+        case .waiting: begin(state.phase == .focus ? nextBreak : .focus, s)
+        }
+    }
+
+    /// Returns to a fresh focus phase of the configured length and restarts the cycle.
+    public func reset(_ s: Stamp) {
+        finishRecord(state.status == .waiting ? "completed" : "cancelled", s)
+        state = PomodoroState()
+        persist()
+    }
+
+    /// Persisted focus length (default 25). A running phase keeps its length; the next focus uses the new one.
+    public func setFocusMinutes(_ minutes: Int) {
+        let clamped = min(max(minutes, Self.focusMinutesRange.lowerBound), Self.focusMinutesRange.upperBound)
+        settings.focusMinutes = clamped
+        try? ledger.setSetting(Self.focusMinutesKey, "\(clamped)")
     }
 
     /// Sleep/lock pause the phase; waking requires an explicit resume.

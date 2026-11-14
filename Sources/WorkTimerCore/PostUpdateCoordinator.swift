@@ -1,13 +1,11 @@
 import Foundation
 
 public protocol UpdateSteps {
-    /// Backs up the database, then runs migrations. Must preserve data on failure.
-    func backupAndMigrate() throws
     func republishWidgetSnapshot() throws
     func reloadWidgets()
 }
 
-/// Migrates once per bundle-version change; republishes and reloads widgets on every launch.
+/// Records bundle-version changes; republishes and reloads widgets on every launch.
 public struct PostUpdateCoordinator {
     static let key = "lastRunVersion"
     let defaults: UserDefaults
@@ -22,10 +20,9 @@ public struct PostUpdateCoordinator {
     @discardableResult
     public func runOnLaunch(currentVersion: String) throws -> Bool {
         let updated = defaults.string(forKey: Self.key) != currentVersion
-        if updated { try steps.backupAndMigrate() }
         try steps.republishWidgetSnapshot()
         steps.reloadWidgets()
-        // Recorded last so a failed migration is retried on next launch.
+        // Recorded last so failed publication is retried on next launch.
         if updated { defaults.set(currentVersion, forKey: Self.key) }
         return updated
     }

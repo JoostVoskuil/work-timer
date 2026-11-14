@@ -19,7 +19,8 @@ public enum DomainMatcher {
 }
 
 public struct RuleDecision: Equatable {
-    public var isWork: Bool
+    public var category: Category
+    public var isWork: Bool { category == .work }
     public var reason: Reason
     public var explanation: String
 }
@@ -35,7 +36,7 @@ public struct RuleSet {
         ClassificationRule(kind: .app, pattern: "org.videolan.vlc", isWork: false, note: "VLC, default private"),
     ]
 
-    /// A domain-specific rule wins over an app-wide rule; among equals, private wins.
+    /// A domain-specific rule wins over an app-wide rule; among equals, private wins, then learn.
     public func decide(app: String?, domain: String?) -> RuleDecision? {
         if let domain {
             let hits = rules.filter { $0.kind == .domain && DomainMatcher.matches(host: domain, pattern: $0.pattern) }
@@ -50,9 +51,12 @@ public struct RuleSet {
 
     private func pick(_ hits: [ClassificationRule], label: String) -> RuleDecision? {
         guard !hits.isEmpty else { return nil }
-        if let p = hits.first(where: { !$0.isWork }) {
-            return RuleDecision(isWork: false, reason: .privateRule, explanation: "Private \(label) rule: \(p.pattern)")
+        if let p = hits.first(where: { $0.category == .privateTime }) {
+            return RuleDecision(category: .privateTime, reason: .privateRule, explanation: "Private \(label) rule: \(p.pattern)")
         }
-        return RuleDecision(isWork: true, reason: .workRule, explanation: "Work \(label) rule: \(hits[0].pattern)")
+        if let l = hits.first(where: { $0.category == .learn }) {
+            return RuleDecision(category: .learn, reason: .learnRule, explanation: "Learn \(label) rule: \(l.pattern)")
+        }
+        return RuleDecision(category: .work, reason: .workRule, explanation: "Work \(label) rule: \(hits[0].pattern)")
     }
 }

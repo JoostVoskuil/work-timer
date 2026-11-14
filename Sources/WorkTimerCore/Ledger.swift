@@ -10,28 +10,38 @@ public enum LedgerError: Error, CustomStringConvertible {
     }
 }
 
-/// Canonical store. The app is the only writer of `activity_intervals`.
+/// Canonical block store. The app is the only writer.
 public final class Ledger {
-    public static let schemaVersion = 1
+    public static let schemaVersion = 2
     public let db: SQLiteDB
+    public var accountingError: String?
 
-    /// Opens (and migrates) the database. A pre-migration backup is made for an existing file; a failed migration
-    /// is rolled back and the previous data stays intact.
-    public init(path: String, backupsDirectory: URL? = nil) throws {
+    /// Opens the current schema or initializes a new database without converting existing data.
+    public init(path: String) throws {
         db = try SQLiteDB(path: path)
-        try migrate(path: path, backupsDirectory: backupsDirectory)
+        let version = db.userVersion
+        guard version == 0 || version == Self.schemaVersion else {
+            throw SQLiteError.invalid(version < Self.schemaVersion
+                ? "Legacy database schema \(version) is no longer supported. Use the earlier WorkTimer version to convert it first; existing data was preserved."
+                : "This database requires a newer WorkTimer.")
+        }
+        if version == 0 {
+            guard try db.scalar("SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%'") == 0 else {
+                throw SQLiteError.invalid("Unversioned database is not empty; existing data was preserved.")
+            }
+            try db.transaction {
+                for sql in Self.schema { try db.exec(sql) }
+                try seedDefaults()
+                try db.setUserVersion(Self.schemaVersion)
+            }
+        }
     }
 
     public static func inMemory() throws -> Ledger { try Ledger(path: ":memory:") }
 
-    private static let migrations: [[String]] = [[
-        """
-        CREATE TABLE activity_intervals(
-          id INTEGER PRIMARY KEY AUTOINCREMENT,
-          start_ms INTEGER NOT NULL, end_ms INTEGER NOT NULL CHECK(end_ms > start_ms),
-          category TEXT NOT NULL, reason TEXT NOT NULL, app TEXT, domain TEXT, source TEXT NOT NULL)
-        """,
-        "CREATE INDEX idx_intervals_start ON activity_intervals(start_ms)",
+    private static let schema: [String] = [
+        "CREATE TABLE activity_blocks(start_ms INTEGER PRIMARY KEY,end_ms INTEGER NOT NULL,counters_json TEXT NOT NULL)",
+        "CREATE TABLE gap_runs(start_ms INTEGER PRIMARY KEY,end_ms INTEGER NOT NULL CHECK(end_ms>start_ms))",
         "CREATE TABLE tracking_checkpoint(id INTEGER PRIMARY KEY CHECK(id = 1), observed_ms INTEGER NOT NULL, clean_quit INTEGER NOT NULL, state_json TEXT NOT NULL)",
         "CREATE TABLE classification_rules(id INTEGER PRIMARY KEY AUTOINCREMENT, kind TEXT NOT NULL, pattern TEXT NOT NULL, is_work INTEGER NOT NULL, note TEXT NOT NULL DEFAULT '', UNIQUE(kind, pattern))",
         """
@@ -61,25 +71,7 @@ public final class Ledger {
         """,
         "CREATE TABLE notification_deliveries(date TEXT NOT NULL, threshold_min INTEGER NOT NULL, delivered_ms INTEGER NOT NULL, PRIMARY KEY(date, threshold_min))",
         "CREATE TABLE settings(key TEXT PRIMARY KEY, value TEXT NOT NULL, version INTEGER NOT NULL DEFAULT 1)",
-    ]]
-
-    private func migrate(path: String, backupsDirectory: URL?) throws {
-        let current = db.userVersion
-        guard current < Self.migrations.count else { return }
-        if current > 0, let dir = backupsDirectory {
-            try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
-            try db.backup(to: dir.appendingPathComponent("pre-migration-v\(current).sqlite").path)
-        }
-        for v in current..<Self.migrations.count {
-            do {
-                try db.transaction {
-                    for sql in Self.migrations[v] { try db.exec(sql) }
-                    try db.setUserVersion(v + 1)
-                }
-            } catch { throw SQLiteError.migration("Migration \(v + 1) failed; existing data preserved: \(error)") }
-        }
-        try seedDefaults()
-    }
+    ]
 
     private func seedDefaults() throws {
         if try db.scalar("SELECT COUNT(*) FROM schedule_versions") == 0 { try addScheduleVersion(ScheduleVersion()) }
@@ -110,55 +102,11 @@ public final class Ledger {
 
     @discardableResult
     public func append(_ i: ActivityInterval) throws -> Int64 {
-        guard i.span.end > i.span.start else { throw LedgerError.badRange }
-        return try db.transaction {
-            if let maxEnd = try db.scalar("SELECT MAX(end_ms) FROM activity_intervals"), i.span.start < maxEnd {
-                throw LedgerError.overlap(i.span)
-            }
-            // Coalesce with an identical, adjacent previous interval.
-            if let prev = try db.query("SELECT id, end_ms, category, reason, app, domain, source FROM activity_intervals ORDER BY start_ms DESC LIMIT 1", [], { r in
-                (r.int(0), r.int(1), r.text(2), r.text(3), r.optText(4), r.optText(5), r.text(6)) }).first,
-               prev.1 == i.span.start, prev.2 == i.category.rawValue, prev.3 == i.reason.rawValue,
-               prev.4 == i.app, prev.5 == i.domain, prev.6 == i.source {
-                try db.exec("UPDATE activity_intervals SET end_ms = ? WHERE id = ?", [.int(i.span.end), .int(prev.0)])
-                return prev.0
-            }
-            try db.exec("INSERT INTO activity_intervals(start_ms,end_ms,category,reason,app,domain,source) VALUES(?,?,?,?,?,?,?)",
-                        [.int(i.span.start), .int(i.span.end), .text(i.category.rawValue), .text(i.reason.rawValue),
-                         SQLValue(i.app), SQLValue(i.domain), .text(i.source)])
-            return db.lastInsertID
-        }
+        try record([i])
+        return ActivityBlock.floor(i.span.start)
     }
 
-    public func intervals(in span: Span) throws -> [ActivityInterval] {
-        try db.query("SELECT id,start_ms,end_ms,category,reason,app,domain,source FROM activity_intervals WHERE end_ms > ? AND start_ms < ? ORDER BY start_ms",
-                     [.int(span.start), .int(span.end)]) { r in
-            ActivityInterval(id: r.int(0), span: Span(r.int(1), r.int(2)), category: Category(rawValue: r.text(3)) ?? .gap,
-                             reason: Reason(rawValue: r.text(4)) ?? .correction, app: r.optText(5), domain: r.optText(6), source: r.text(7))
-        }
-    }
-
-    public func lastIntervalEnd() -> Millis? { try? db.scalar("SELECT MAX(end_ms) FROM activity_intervals") }
-
-    /// Rewrites captured pending intervals of one reason inside `span` (used when an outside-hours session is answered).
-    public func reclassify(span: Span, fromReason: Reason, to category: Category, reason: Reason) throws {
-        try db.transaction {
-            let rows = try intervals(in: span).filter { $0.reason == fromReason }
-            for row in rows {
-                guard let cut = row.span.intersection(span), let id = row.id else { continue }
-                if cut.start > row.span.start {
-                    try db.exec("INSERT INTO activity_intervals(start_ms,end_ms,category,reason,app,domain,source) VALUES(?,?,?,?,?,?,?)",
-                                [.int(row.span.start), .int(cut.start), .text(row.category.rawValue), .text(row.reason.rawValue), SQLValue(row.app), SQLValue(row.domain), .text(row.source)])
-                }
-                if cut.end < row.span.end {
-                    try db.exec("INSERT INTO activity_intervals(start_ms,end_ms,category,reason,app,domain,source) VALUES(?,?,?,?,?,?,?)",
-                                [.int(cut.end), .int(row.span.end), .text(row.category.rawValue), .text(row.reason.rawValue), SQLValue(row.app), SQLValue(row.domain), .text(row.source)])
-                }
-                try db.exec("UPDATE activity_intervals SET start_ms=?, end_ms=?, category=?, reason=? WHERE id=?",
-                            [.int(cut.start), .int(cut.end), .text(category.rawValue), .text(reason.rawValue), .int(id)])
-            }
-        }
-    }
+    public func lastIntervalEnd() -> Millis? { try? db.scalar("SELECT MAX(end_ms) FROM activity_blocks") }
 
     // MARK: Checkpoint
 
@@ -176,16 +124,20 @@ public final class Ledger {
     public func upsertRule(_ r: ClassificationRule) throws {
         guard let p = r.kind == .domain ? DomainMatcher.normalize(r.pattern) : r.pattern.lowercased() as String?, !p.isEmpty else { throw LedgerError.badRange }
         try db.exec("INSERT INTO classification_rules(kind,pattern,is_work,note) VALUES(?,?,?,?) ON CONFLICT(kind,pattern) DO UPDATE SET is_work=excluded.is_work, note=excluded.note",
-                    [.text(r.kind.rawValue), .text(p), .int(r.isWork ? 1 : 0), .text(r.note)])
+                    [.text(r.kind.rawValue), .text(p), .int(Self.ruleCode(r.category)), .text(r.note)])
     }
 
     public func deleteRule(id: Int64) throws { try db.exec("DELETE FROM classification_rules WHERE id=?", [.int(id)]) }
 
     public func rules() -> [ClassificationRule] {
         (try? db.query("SELECT id,kind,pattern,is_work,note FROM classification_rules ORDER BY kind, pattern") {
-            ClassificationRule(id: $0.int(0), kind: RuleKind(rawValue: $0.text(1)) ?? .app, pattern: $0.text(2), isWork: $0.int(3) == 1, note: $0.text(4))
+            ClassificationRule(id: $0.int(0), kind: RuleKind(rawValue: $0.text(1)) ?? .app, pattern: $0.text(2), category: Self.ruleCategory($0.int(3)), note: $0.text(4))
         }) ?? []
     }
+
+    /// `is_work` stores 0 = Private, 1 = Work, 2 = Learn; older databases only contain 0 and 1.
+    static func ruleCode(_ c: Category) -> Int64 { c == .work ? 1 : c == .learn ? 2 : 0 }
+    static func ruleCategory(_ code: Int64) -> Category { code == 1 ? .work : code == 2 ? .learn : .privateTime }
 
     // MARK: Schedule
 
@@ -242,24 +194,6 @@ public final class Ledger {
         try db.exec("UPDATE review_items SET end_ms = ? WHERE id = ?", [.int(end), .int(id)])
     }
 
-    /// A process restart ends every previous live session, even if it never wrote an end event.
-    public func closeInterruptedOutsideReviews(observed: Millis) throws {
-        let unfinished = try db.query(
-            "SELECT id,start_ms FROM review_items WHERE type='outsideHours' AND status='pending' AND end_ms IS NULL ORDER BY start_ms"
-        ) { ($0.int(0), $0.int(1)) }
-        for (id, start) in unfinished {
-            let nextStart = try db.scalar(
-                "SELECT MIN(start_ms) FROM review_items WHERE type='outsideHours' AND start_ms>?", [.int(start)]
-            ) ?? observed
-            let limit = min(observed, nextStart)
-            let lastEvidence = try db.scalar(
-                "SELECT MAX(MIN(end_ms,?)) FROM activity_intervals WHERE reason=? AND start_ms>=? AND start_ms<?",
-                [.int(limit), .text(Reason.outsideHours.rawValue), .int(start), .int(limit)]
-            )
-            try setReviewEnd(id: id, end: max(start + 1, lastEvidence ?? start + 1))
-        }
-    }
-
     public func resolveReview(id: Int64, resolution: String, at: Millis) throws {
         try db.exec("UPDATE review_items SET status='resolved', resolved_ms=?, resolution=? WHERE id=?", [.int(at), .text(resolution), .int(id)])
     }
@@ -278,13 +212,23 @@ public final class Ledger {
     @discardableResult
     public func addAdjustment(_ a: Adjustment) throws -> Int64 {
         guard a.span.end > a.span.start else { throw LedgerError.badRange }
+        guard a.kind == .manual || a.reviewID != nil ||
+                (a.span.start == ActivityBlock.floor(a.span.start) && a.span.end == ActivityBlock.floor(a.span.end)) else {
+            throw SQLiteError.invalid("Select complete five-minute blocks for a correction.")
+        }
         try db.exec("INSERT INTO manual_adjustments(start_ms,end_ms,category,kind,note,created_ms,review_id) VALUES(?,?,?,?,?,?,?)",
                     [.int(a.span.start), .int(a.span.end), .text(a.category.rawValue), .text(a.kind.rawValue), .text(a.note), .int(a.createdAt), SQLValue(a.reviewID)])
         return db.lastInsertID
     }
 
     public func undoAdjustment(id: Int64, at: Millis) throws {
-        try db.exec("UPDATE manual_adjustments SET undone_ms = ? WHERE id = ? AND undone_ms IS NULL", [.int(at), .int(id)])
+        try db.transaction {
+            let reviewID = try db.scalar("SELECT review_id FROM manual_adjustments WHERE id=? AND undone_ms IS NULL", [.int(id)])
+            try db.exec("UPDATE manual_adjustments SET undone_ms = ? WHERE id = ? AND undone_ms IS NULL", [.int(at), .int(id)])
+            if let reviewID {
+                try db.exec("UPDATE review_items SET status='pending',resolved_ms=NULL,resolution=NULL WHERE id=?", [.int(reviewID)])
+            }
+        }
     }
 
     public func adjustments(in span: Span, includeUndone: Bool = false) throws -> [Adjustment] {
@@ -321,32 +265,38 @@ public final class Ledger {
 
     // MARK: Data management
 
-    /// Deletes captured time, corrections, reviews and delivery records in [span). Intervals straddling the edge are trimmed.
+    /// Deletes blocks, corrections and reviews in [span). Straddling corrections are trimmed.
     public func deleteRange(_ span: Span) throws {
+        guard span.start == ActivityBlock.floor(span.start), span.end == ActivityBlock.floor(span.end) else {
+            throw SQLiteError.invalid("Deletion boundaries must align to five-minute blocks.")
+        }
         try db.transaction {
+            try db.exec("DELETE FROM activity_blocks WHERE start_ms>=? AND start_ms<?", [.int(span.start), .int(span.end)])
+            try db.exec("DELETE FROM gap_runs WHERE start_ms>=? AND end_ms<=?", [.int(span.start), .int(span.end)])
             let args: [SQLValue] = [.int(span.start), .int(span.end)]
-            try db.exec("DELETE FROM activity_intervals WHERE start_ms >= ? AND end_ms <= ?", args)
-            for row in try intervals(in: span) {
-                guard let id = row.id else { continue }
-                let left = row.span.start < span.start, right = row.span.end > span.end
-                if left && right {
-                    try db.exec("UPDATE activity_intervals SET end_ms=? WHERE id=?", [.int(span.start), .int(id)])
-                    try db.exec("INSERT INTO activity_intervals(start_ms,end_ms,category,reason,app,domain,source) VALUES(?,?,?,?,?,?,?)",
-                                [.int(span.end), .int(row.span.end), .text(row.category.rawValue), .text(row.reason.rawValue), SQLValue(row.app), SQLValue(row.domain), .text(row.source)])
-                } else if left {
-                    try db.exec("UPDATE activity_intervals SET end_ms=? WHERE id=?", [.int(span.start), .int(id)])
-                } else if right {
-                    try db.exec("UPDATE activity_intervals SET start_ms=? WHERE id=?", [.int(span.end), .int(id)])
-                }
+            for adjustment in try adjustments(in: span, includeUndone: true) {
+                guard let id = adjustment.id else { continue }
+                if adjustment.span.start < span.start {
+                    try db.exec("UPDATE manual_adjustments SET end_ms=? WHERE id=?", [.int(span.start), .int(id)])
+                    if adjustment.span.end > span.end {
+                        var right = adjustment
+                        right.span.start = span.end
+                        let newID = try addAdjustment(right)
+                        if let undone = adjustment.undoneAt {
+                            try db.exec("UPDATE manual_adjustments SET undone_ms=? WHERE id=?", [.int(undone), .int(newID)])
+                        }
+                    }
+                } else if adjustment.span.end > span.end {
+                    try db.exec("UPDATE manual_adjustments SET start_ms=? WHERE id=?", [.int(span.end), .int(id)])
+                } else { try db.exec("DELETE FROM manual_adjustments WHERE id=?", [.int(id)]) }
             }
-            try db.exec("DELETE FROM manual_adjustments WHERE start_ms >= ? AND end_ms <= ?", args)
             try db.exec("DELETE FROM review_items WHERE start_ms >= ? AND start_ms < ?", args)
         }
     }
 
     public func deleteAllHistory() throws {
         try db.transaction {
-            for t in ["activity_intervals", "manual_adjustments", "review_items", "notification_deliveries", "pomodoro_sessions", "tracking_checkpoint"] {
+            for t in ["activity_blocks", "gap_runs", "manual_adjustments", "review_items", "notification_deliveries", "pomodoro_sessions", "tracking_checkpoint"] {
                 try db.exec("DELETE FROM \(t)")
             }
         }

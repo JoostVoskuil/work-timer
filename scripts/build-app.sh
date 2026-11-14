@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Builds WorkTimer.app (menu-bar app, no Dock icon) with SwiftPM and ad-hoc signs it.
+# Builds WorkTimer.app (menu-bar app with a Dock icon while its window is open) with SwiftPM and ad-hoc signs it.
 set -euo pipefail
 cd "$(dirname "$0")/.."
 VERSION="${VERSION:-0.1.0}"

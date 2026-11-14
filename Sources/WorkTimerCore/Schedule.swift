@@ -136,6 +136,20 @@ public struct Schedule {
         return t >= w.start && t < w.end
     }
 
+    public func workingSpans(in span: Span) -> [Span] {
+        guard !span.isEmpty else { return [] }
+        var result: [Span] = []
+        var day = localDate(span.start)
+        let last = localDate(span.end - 1)
+        while day <= last {
+            if let window = workWindow(day), let cut = window.intersection(span) {
+                result.append(cut)
+            }
+            day = addDays(day, 1)
+        }
+        return result
+    }
+
     /// Next instant strictly after `t` at which the default classification can change (window edges or midnight).
     public func nextBoundary(after t: Millis) -> Millis {
         let d = localDate(t)

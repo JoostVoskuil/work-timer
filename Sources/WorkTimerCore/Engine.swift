@@ -33,6 +33,8 @@ public enum EngineEvent {
     case learning(Bool)
     case tick
     case answerOutside(OutsideAnswer)
+    /// Clears a manual mode so the schedule and rules decide again.
+    case automaticMode
     case shutdown
 }
 
@@ -50,7 +52,6 @@ public struct EngineConfig {
     public var maxObservationAge: Millis = 60_000
     public var suspensionThreshold: Millis = 30_000
     public var clockJumpBackThreshold: Millis = 5_000
-    public var minGapReview: Millis = 60_000
     public init() {}
 }
 
@@ -69,6 +70,8 @@ private struct CheckpointState: Codable {
     var reason: Reason?
     var app: String?
     var domain: String?
+    var pending: [ActivityInterval]? = nil
+    var appsByBlock: [Millis: [String]]? = nil
 }
 
 /// Serialized, event-driven tracker producing non-overlapping half-open intervals. Classification follows the
@@ -80,7 +83,7 @@ public final class TrackingEngine {
         var reason: Reason
         var app: String?
         var domain: String?
-        func sameKey(_ o: Open) -> Bool { category == o.category && reason == o.reason && app == o.app && domain == o.domain }
+        func sameKey(_ o: Open) -> Bool { category == o.category && reason == o.reason && app == o.app }
     }
     private struct Outside { var start: Millis; var answer: OutsideAnswer?; var reviewID: Int64? }
 
@@ -106,6 +109,8 @@ public final class TrackingEngine {
     private var outside: Outside?
     private var lastSeq: [String: Int] = [:]
     private var seenIDs: [String] = []
+    private var pending: [ActivityInterval] = []
+    private var sessionStart: Millis = 0
 
     public init(ledger: Ledger, config: EngineConfig = EngineConfig()) {
         self.ledger = ledger
@@ -127,14 +132,25 @@ public final class TrackingEngine {
         try ledger.db.transaction {
             let floor = ledger.lastIntervalEnd() ?? 0
             let observed = max(cp.observed, floor)
-            if !cp.cleanQuit, let st = try? JSONDecoder().decode(CheckpointState.self, from: Data(cp.stateJSON.utf8)),
-               let start = st.openStart, let cat = st.category, let reason = st.reason {
-                let s = max(start, floor)
-                if observed > s {
-                    try ledger.append(ActivityInterval(span: Span(s, observed), category: cat, reason: reason, app: st.app, domain: st.domain, source: "recovered"))
+            if !cp.cleanQuit {
+                let st = try JSONDecoder().decode(CheckpointState.self, from: Data(cp.stateJSON.utf8))
+                for interval in st.pending ?? [] {
+                    if let cut = interval.span.intersection(Span(floor, observed)) {
+                        let apps = st.appsByBlock?[ActivityBlock.floor(cut.start)] ?? interval.apps
+                        for fragment in accountedIntervals(ActivityInterval(span: cut, category: interval.category, reason: interval.reason, apps: apps)) {
+                            try ledger.append(fragment)
+                        }
+                    }
+                }
+                if let start = st.openStart, let cat = st.category, let reason = st.reason {
+                    let s = max(start, ledger.lastIntervalEnd() ?? floor)
+                    if observed > s {
+                        for fragment in accountedIntervals(ActivityInterval(span: Span(s, observed), category: cat, reason: reason)) {
+                            try ledger.append(fragment)
+                        }
+                    }
                 }
             }
-            try ledger.closeInterruptedOutsideReviews(observed: observed)
             if now > observed {
                 try appendGap(Span(observed, now), reason: .appNotRunning)
             }
@@ -143,20 +159,10 @@ public final class TrackingEngine {
     }
 
     private func appendGap(_ span: Span, reason: Reason) throws {
-        try ledger.append(ActivityInterval(span: span, category: .gap, reason: reason, source: "recovered"))
-        try maybeReviewGap(span)
-    }
-
-    private func maybeReviewGap(_ span: Span) throws {
-        guard span.length >= config.minGapReview else { return }
-        let d0 = schedule.localDate(span.start), d1 = schedule.localDate(span.end - 1)
-        var d = d0
-        while d <= d1 {
-            if let w = schedule.workWindow(d), let cut = w.intersection(span), cut.length >= config.minGapReview {
-                try ledger.addReview(ReviewItem(type: .gap, start: span.start, end: span.end, createdAt: span.end, dedupeKey: "gap:\(span.start)"))
-                return
-            }
-            d = schedule.addDays(d, 1)
+        buffer(ActivityInterval(span: span, category: .gap, reason: reason, source: "recovered"))
+        if !started {
+            try ledger.record(pending)
+            pending = []
         }
     }
 
@@ -165,13 +171,13 @@ public final class TrackingEngine {
     /// Processes one event atomically. Returns false only for a rejected browser observation.
     @discardableResult
     public func handle(_ event: EngineEvent, at stamp: Stamp) throws -> Bool {
-        try ledger.db.transaction {
+        do {
             var accepted = true
             var eff = try advance(stamp)
-            var transition = true
             switch event {
             case .launch(let a, let idle):
                 started = true
+                sessionStart = eff
                 lastWall = eff; lastMono = stamp.mono
                 app = a
                 if idle >= config.idleThresholdSeconds { userIdle = true; idleStart = eff }
@@ -180,28 +186,31 @@ public final class TrackingEngine {
             case .browser(let o):
                 accepted = accept(o, at: eff)
                 if accepted { browserCtx = (o.state, eff) }
-                transition = false
             case .idleSample(let secs):
                 try applyIdle(seconds: secs, at: &eff)
-                transition = false
-            case .sleep: try endOutside(at: eff); try endIdle(at: eff); asleep = true
+            case .sleep: try endPrompt(at: eff); try endIdle(at: eff); asleep = true
             case .wake: asleep = false
-            case .lock: try endOutside(at: eff); try endIdle(at: eff); locked = true
+            case .lock: try endPrompt(at: eff); try endIdle(at: eff); locked = true
             case .unlock: locked = false
-            case .sessionResigned: try endOutside(at: eff); try endIdle(at: eff); inactive = true
+            case .sessionResigned: try endPrompt(at: eff); try endIdle(at: eff); inactive = true
             case .sessionActivated: inactive = false
-            case .pause: try endOutside(at: eff); try endIdle(at: eff); paused = true
+            case .pause: try endPrompt(at: eff); try endIdle(at: eff); paused = true
             case .resume: paused = false
             case .pomodoroBreak(let b): breakActive = b
             case .learning(let enabled):
                 try endOutside(at: eff)
                 learningActive = enabled
-            case .tick: transition = false
+            case .tick: break
             case .answerOutside(let a): try answer(a, at: eff)
+            case .automaticMode: try endOutside(at: eff)
             case .shutdown:
                 try closeOpen(at: eff)
                 try endOutside(at: eff)
-                try ledger.writeCheckpoint(observed: eff, cleanQuit: true, stateJSON: "{}")
+                try ledger.db.transaction {
+                    try ledger.record(pending)
+                    try ledger.writeCheckpoint(observed: eff, cleanQuit: true, stateJSON: "{}")
+                }
+                pending = []
                 started = false
                 lastWall = eff
                 return accepted
@@ -210,7 +219,12 @@ public final class TrackingEngine {
             try reclassify(at: eff)
             lastWall = max(lastWall, eff)
             lastMono = stamp.mono
-            try checkpoint(at: eff, force: transition)
+            let force: Bool
+            switch event {
+            case .launch, .sleep, .lock, .pause, .sessionResigned: force = true
+            default: force = false
+            }
+            try checkpoint(at: eff, force: force)
             return accepted
         }
     }
@@ -227,7 +241,7 @@ public final class TrackingEngine {
                 eff = lastWall + dMono
             } else if drift > config.suspensionThreshold {
                 try closeOpen(at: lastWall)
-                try endOutside(at: lastWall)
+                try endPrompt(at: lastWall)
                 if eff > lastWall { try appendGap(Span(lastWall, eff), reason: .suspension) }
                 lastWall = eff
             }
@@ -270,13 +284,23 @@ public final class TrackingEngine {
     private func applyIdle(seconds: Double, at eff: inout Millis) throws {
         guard started, tracking else { return }
         if !userIdle && seconds >= config.idleThresholdSeconds {
-            let floor = open?.start ?? lastWall
+            let floor = max(sessionStart, ledger.lastIntervalEnd() ?? sessionStart)
             let start = max(eff - Millis(seconds * 1000), floor)
-            try closeOpen(at: start)
-            try endOutside(at: start)
+            if let o = open, o.start < start { try closeOpen(at: start) }
+            else { open = nil }
+            pending = pending.compactMap { interval in
+                guard interval.span.start < start else { return nil }
+                var interval = interval
+                interval.span.end = min(interval.span.end, start)
+                return interval
+            }
+            try endPrompt(at: start)
             userIdle = true
             idleStart = start
-            try reclassify(at: start)
+            if eff > start {
+                buffer(ActivityInterval(span: Span(start, eff), category: breakActive ? .breakTime : .away,
+                                        reason: breakActive ? .pomodoroBreak : .idleTimeout))
+            }
         } else if userIdle && seconds < config.idleThresholdSeconds {
             let end = max(eff - Millis(seconds * 1000), idleStart)
             try endIdle(at: end)
@@ -288,12 +312,6 @@ public final class TrackingEngine {
         guard userIdle else { return }
         try closeOpen(at: t)
         userIdle = false
-        let span = Span(idleStart, t)
-        guard span.length > 0 else { return }
-        let idle = try ledger.intervals(in: span).filter { $0.category == .idle && $0.reason == .idleTimeout }
-        if let first = idle.first, let last = idle.last {
-            try ledger.addReview(ReviewItem(type: .idle, start: first.span.start, end: last.span.end, createdAt: t, dedupeKey: "idle:\(first.span.start)"))
-        }
     }
 
     // MARK: Outside-hours sessions
@@ -304,15 +322,18 @@ public final class TrackingEngine {
         outside = nil
     }
 
+    /// Ends an unanswered after-hours prompt. A chosen manual mode survives idle, lock and sleep.
+    private func endPrompt(at t: Millis) throws {
+        guard outside?.answer == nil else { return }
+        try endOutside(at: t)
+    }
+
+    /// A manual mode overrides the schedule and app/domain rules until Automatic or the next work-window boundary.
     private func answer(_ a: OutsideAnswer, at t: Millis) throws {
-        guard var o = outside, o.answer == nil, a != .later else { return }
+        guard a != .later else { return }
         try closeOpen(at: t)
-        o.answer = a
-        let cat: Category = a == .work ? .work : a == .learn ? .learn : .privateTime
-        let reason: Reason = a == .work ? .outsideHoursWork : a == .learn ? .outsideHoursLearn : .outsideHoursPrivate
-        if t > o.start { try ledger.reclassify(span: Span(o.start, t), fromReason: .outsideHours, to: cat, reason: reason) }
-        if let id = o.reviewID { try ledger.resolveReview(id: id, resolution: a.rawValue, at: t) }
-        outside = o
+        learningActive = false
+        outside = Outside(start: t, answer: a, reviewID: nil)
     }
 
     // MARK: Classification
@@ -324,45 +345,37 @@ public final class TrackingEngine {
 
     private func desired(at t: Millis) throws -> Open? {
         func ex(_ c: Category, _ r: Reason, app: String? = nil, domain: String? = nil) -> Open { Open(start: t, category: c, reason: r, app: app, domain: domain) }
-        if (asleep || locked) && !schedule.inWorkWindow(t) { return nil }
+        if !tracking && !schedule.inWorkWindow(t) { return nil }
         if asleep { return ex(.away, .asleep) }
         if locked { return ex(.away, .locked) }
         if inactive { return ex(.away, .sessionInactive) }
         if paused { return ex(.away, .paused) }
-        if breakActive { return ex(.breakTime, .pomodoroBreak) }
-        if userIdle { return ex(.idle, .idleTimeout, app: app) }
+        if breakActive { return ex(.breakTime, .pomodoroBreak, app: userIdle ? nil : app) }
+        if userIdle { return schedule.inWorkWindow(t) ? ex(.away, .idleTimeout) : nil }
         guard let appID = app else { return ex(.gap, .suspension) }
         var domain: String?
+        let manual = manualMode
         if appID == safariBundleID {
             switch freshBrowser(at: t) {
             case .domain(let h)?: domain = DomainMatcher.normalize(h)
-            case .privateBrowsing?: return ex(.privateTime, .privateBrowsing)
-            default: return ex(.gap, .browserUnknown, app: appID)
+            case .privateBrowsing?: return ex(.privateTime, .privateBrowsing, app: appID)
+            default: if manual == nil { return ex(.gap, .browserUnknown, app: appID) }
             }
         }
+        if let manual { return ex(manual, .manualMode, app: appID, domain: domain) }
         if let d = rules.decide(app: appID, domain: domain) {
-            if d.isWork && (learningActive || outside?.answer == .learn) {
-                return ex(.learn, learningActive ? .learning : .outsideHoursLearn, app: appID, domain: domain)
-            }
-            return ex(d.isWork ? .work : .privateTime, d.reason, app: appID, domain: domain)
-        }
-        if let a = outside?.answer, a != .later {
-            if a == .learn { return ex(.learn, .outsideHoursLearn, app: appID, domain: domain) }
-            return a == .work ? ex(.work, .outsideHoursWork, app: appID, domain: domain) : ex(.privateTime, .outsideHoursPrivate, app: appID, domain: domain)
+            if d.isWork && learningActive { return ex(.learn, .learning, app: appID, domain: domain) }
+            return ex(d.category, d.reason, app: appID, domain: domain)
         }
         if learningActive { return ex(.learn, .learning, app: appID, domain: domain) }
         if schedule.inWorkWindow(t) { return ex(.work, .workWindow, app: appID, domain: domain) }
-        if outside == nil {
-            let id = try ledger.addReview(ReviewItem(type: .outsideHours, start: t, createdAt: t, dedupeKey: "outside:\(t)"))
-            outside = Outside(start: t, answer: nil, reviewID: id)
-        }
-        return ex(.privateTime, .outsideHours, app: appID, domain: domain)
+        return ex(.privateTime, .outsideHoursPrivate, app: appID, domain: domain)
     }
 
     private func reclassify(at t: Millis, boundary: Bool = false) throws {
         guard started else { return }
         if boundary { try endOutside(at: t) }
-        if !tracking || userIdle { try endOutside(at: t) }
+        if !tracking || userIdle { try endPrompt(at: t) }
         guard let d = try desired(at: t) else {
             try closeOpen(at: t)
             return
@@ -377,16 +390,69 @@ public final class TrackingEngine {
         open = nil
         guard t > o.start else { return }
         let span = Span(o.start, t)
-        try ledger.append(ActivityInterval(span: span, category: o.category, reason: o.reason, app: o.app, domain: o.domain))
-        if o.category == .gap { try maybeReviewGap(span) }
+        buffer(ActivityInterval(span: span, category: o.category, reason: o.reason, apps: o.app.map { [$0] } ?? []))
+    }
+
+    private func buffer(_ interval: ActivityInterval) {
+        for fragment in accountedIntervals(interval) {
+            var start = fragment.span.start
+            while start < fragment.span.end {
+                var part = fragment
+                part.span = Span(start, min(fragment.span.end, ActivityBlock.floor(start) + ActivityBlock.length))
+                if let last = pending.last, last.span.end == part.span.start,
+                   ActivityBlock.floor(last.span.start) == ActivityBlock.floor(part.span.start),
+                   last.category == part.category, last.reason == part.reason {
+                    pending[pending.count - 1].span.end = part.span.end
+                    pending[pending.count - 1].apps = Array(Set(last.apps + part.apps)).sorted()
+                } else { pending.append(part) }
+                start = part.span.end
+            }
+        }
+    }
+
+    private func accountedIntervals(_ interval: ActivityInterval) -> [ActivityInterval] {
+        guard interval.category == .away || interval.category == .idle else { return [interval] }
+        return schedule.workingSpans(in: interval.span).map { span in
+            var fragment = interval
+            fragment.span = span
+            return fragment
+        }
     }
 
     private func checkpoint(at t: Millis, force: Bool) throws {
         guard force || t - lastCheckpoint >= config.checkpointInterval else { return }
+        if var current = open, t > current.start {
+            buffer(ActivityInterval(span: Span(current.start, t), category: current.category, reason: current.reason,
+                                    apps: current.app.map { [$0] } ?? []))
+            current.start = t
+            open = current
+        }
+        let cutoff = ActivityBlock.floor(t - Millis(config.idleThresholdSeconds * 1000))
+        var durable: [ActivityInterval] = [], tail: [ActivityInterval] = []
+        for interval in pending {
+            if interval.span.start < cutoff {
+                var part = interval; part.span.end = min(cutoff, interval.span.end); durable.append(part)
+            }
+            if interval.span.end > cutoff {
+                var part = interval; part.span.start = max(cutoff, interval.span.start); tail.append(part)
+            }
+        }
+        let appsByBlock = Dictionary(uniqueKeysWithValues: try BlockAccounting.aggregate(tail)
+            .filter { !$0.apps.isEmpty }.map { ($0.start, $0.apps) })
+        let storedTail = tail.map { interval in
+            var interval = interval
+            interval.apps = []
+            return interval
+        }
+        let st = CheckpointState(openStart: open?.start, category: open?.category, reason: open?.reason,
+                                 app: nil, domain: nil, pending: storedTail, appsByBlock: appsByBlock)
+        let json = String(decoding: try JSONEncoder().encode(st), as: UTF8.self)
+        try ledger.db.transaction {
+            try ledger.record(durable)
+            try ledger.writeCheckpoint(observed: t, cleanQuit: false, stateJSON: json)
+        }
+        pending = tail
         lastCheckpoint = t
-        let st = CheckpointState(openStart: open?.start, category: open?.category, reason: open?.reason, app: open?.app, domain: open?.domain)
-        let json = String(data: (try? JSONEncoder().encode(st)) ?? Data("{}".utf8), encoding: .utf8) ?? "{}"
-        try ledger.writeCheckpoint(observed: t, cleanQuit: false, stateJSON: json)
     }
 
     // MARK: Live view
@@ -394,18 +460,41 @@ public final class TrackingEngine {
     /// The running (not yet stored) interval, clipped to `now`, so totals include the present moment.
     public func liveInterval(now: Millis) -> ActivityInterval? {
         guard let o = open, now > o.start else { return nil }
-        return ActivityInterval(span: Span(o.start, now), category: o.category, reason: o.reason, app: o.app, domain: o.domain, source: "live")
+        return ActivityInterval(span: Span(o.start, now), category: o.category, reason: o.reason, app: o.app,
+                                domain: o.domain, source: "live", apps: o.app.map { [$0] } ?? [])
+    }
+
+    public func liveIntervals(now: Millis) -> [ActivityInterval] {
+        pending + (liveInterval(now: now).map { [$0] } ?? [])
+    }
+
+    public func checkpointNow(at stamp: Stamp) throws {
+        try handle(.tick, at: stamp)
+        try checkpoint(at: lastWall, force: true)
     }
 
     public func liveStatus() -> LiveStatus? {
         guard let o = open else { return nil }
         return LiveStatus(category: o.category, reason: o.reason, app: o.app, domain: o.domain, since: o.start,
-                          outsidePrompt: outside != nil && outside?.answer == nil)
+                          outsidePrompt: false)
     }
 
     public var isRunning: Bool { started }
     public var isTrackingPaused: Bool { paused }
     public var isLearning: Bool { learningActive }
+    /// The category chosen with the menu mode buttons, or nil when the schedule and rules decide.
+    public var manualMode: Category? {
+        switch outside?.answer {
+        case .work?: return .work
+        case .private?: return .privateTime
+        case .learn?: return .learn
+        default: return nil
+        }
+    }
+    /// The category the schedule alone would assign at `t`, ignoring rules and manual mode.
+    public func scheduledCategory(at t: Millis) -> Category {
+        schedule.inWorkWindow(t) ? .work : .privateTime
+    }
     public var pendingOutsideReviewID: Int64? {
         outside?.answer == nil ? outside?.reviewID : nil
     }
