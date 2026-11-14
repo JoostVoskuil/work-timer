@@ -67,12 +67,22 @@ private struct GraphContent: View {
     let stale: Bool
     let large: Bool
 
+    private var chartBuckets: [WidgetGraphBucket] {
+        guard period == .daily else { return buckets }
+        var calendar = Calendar(identifier: .gregorian)
+        calendar.timeZone = timeZone
+        return buckets.filter {
+            let hour = calendar.component(.hour, from: Date(timeIntervalSince1970: Double($0.start) / 1000))
+            return (6..<23).contains(hour)
+        }
+    }
+
     private var unit: Double { Double(period == .daily ? Duration.minute : Duration.hour) }
-    private var peak: Double { buckets.map { Double($0.work + $0.personal + $0.learn) / unit }.max() ?? 0 }
+    private var peak: Double { chartBuckets.map { Double($0.work + $0.personal + $0.learn) / unit }.max() ?? 0 }
     private var upperBound: Double { period == .daily ? max(60, peak) : max(8, (peak / 2).rounded(.up) * 2) }
-    private var keys: [String] { buckets.indices.map(String.init) }
+    private var keys: [String] { chartBuckets.indices.map(String.init) }
     private var ticks: [String] {
-        period == .weekly ? keys : buckets.indices.filter { $0 % 6 == 0 || $0 == buckets.count - 1 }.map(String.init)
+        period == .weekly ? keys : chartBuckets.indices.filter { $0 % 4 == 0 }.map(String.init)
     }
 
     private func label(_ millis: Millis, format: String) -> String {
@@ -102,7 +112,7 @@ private struct GraphContent: View {
             }.lineLimit(1).minimumScaleFactor(0.85)
 
             Chart {
-                ForEach(Array(buckets.enumerated()), id: \.offset) { index, bucket in
+                ForEach(Array(chartBuckets.enumerated()), id: \.offset) { index, bucket in
                     ForEach(GraphCategory.allCases, id: \.self) { category in
                         BarMark(x: .value("Time", String(index)),
                                 y: .value(period == .daily ? "Minutes" : "Hours", Double(category.duration(in: bucket)) / unit),
@@ -121,8 +131,8 @@ private struct GraphContent: View {
                 AxisMarks(values: ticks) { value in
                     AxisValueLabel {
                         if let key = value.as(String.self), ticks.contains(key),
-                           let index = Int(key), buckets.indices.contains(index) {
-                            Text(label(buckets[index].start, format: period == .daily ? "HH" : "EEE")).font(.system(size: 9))
+                           let index = Int(key), chartBuckets.indices.contains(index) {
+                            Text(label(chartBuckets[index].start, format: period == .daily ? "HH" : "EEE")).font(.system(size: 9))
                         }
                     }
                 }
@@ -139,7 +149,7 @@ private struct GraphContent: View {
             }
             .overlay {
                 if peak == 0 {
-                    Text("No classified time yet").font(.caption).foregroundStyle(.secondary)
+                    Text(period == .daily ? "No activity between 06:00–23:00" : "No classified time yet").font(.caption).foregroundStyle(.secondary)
                         .padding(6).background(.background, in: RoundedRectangle(cornerRadius: 5))
                 }
             }
@@ -162,7 +172,7 @@ private struct GraphContent: View {
 
             if large {
                 HStack {
-                    Text(period == .daily ? "Activity by hour" : "Monday – Sunday")
+                    Text(period == .daily ? "06:00–23:00 · full-day totals" : "Monday – Sunday")
                     Spacer()
                     Text("Updated \(label(Millis(generatedAt.timeIntervalSince1970 * 1000), format: "HH:mm"))")
                 }.font(.caption2).foregroundStyle(.secondary)
@@ -178,7 +188,7 @@ struct DailyGraphWidget: Widget {
                 .containerBackground(for: .widget) { Color(nsColor: .windowBackgroundColor) }
         }
         .configurationDisplayName("Daily graph")
-        .description("Your day by hour, with Work, Private and Learn totals.")
+        .description("Activity from 06:00 to 23:00, with full-day Work, Private and Learn totals.")
         .supportedFamilies([.systemMedium, .systemLarge])
     }
 }
