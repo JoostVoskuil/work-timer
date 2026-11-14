@@ -7,14 +7,16 @@ swift build -c release
 BIN="$(swift build -c release --show-bin-path)/WorkTimerApp"
 APP="build/WorkTimer.app"
 rm -rf "$APP"
-mkdir -p "$APP/Contents/MacOS"
+mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources"
 cp "$BIN" "$APP/Contents/MacOS/WorkTimer"
+cp Sources/WorkTimerApp/Resources/WorkTimer.icns "$APP/Contents/Resources/WorkTimer.icns"
 cat > "$APP/Contents/Info.plist" <<PLIST
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0"><dict>
   <key>CFBundleIdentifier</key><string>nl.worktimer.app</string>
   <key>CFBundleName</key><string>WorkTimer</string>
+  <key>CFBundleIconFile</key><string>WorkTimer</string>
   <key>CFBundleExecutable</key><string>WorkTimer</string>
   <key>CFBundlePackageType</key><string>APPL</string>
   <key>CFBundleShortVersionString</key><string>${VERSION}</string>

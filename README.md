@@ -5,6 +5,9 @@ Local-first macOS menu-bar work-hours tracker. No network, no cloud, no screensh
 ## Build and run
 - `swift test` (the test target passes the Swift Testing macro-plugin path needed with Command Line Tools only).
 - `./scripts/build-app.sh` produces `build/WorkTimer.app` (ad-hoc signed). Copy it to `/Applications`, open it, and allow notifications.
+- To build, install and start the full app with its widget and Safari extensions, install XcodeGen (`brew install xcodegen`), set your Apple Developer Team ID, then run `TEAM_ID=YOUR_TEAM_ID ./scripts/watch-install.sh`. It watches app, widget, Safari extension, package and test sources; each detected edit rebuilds, replaces `/Applications/WorkTimer.app` and restarts it. Use `TEAM_ID=YOUR_TEAM_ID ./scripts/watch-install.sh --once` to install and launch without watching. Stop the watcher with Ctrl-C. Set `INSTALL_DIR` only if you deliberately want another installation folder.
+- The Xcode build uses automatic signing and may ask Xcode to provision the configured team. The App Group `group.nl.worktimer.shared` must be available to that team. macOS registers the embedded widget extension when the app is installed/launched, but you still need to add the WorkTimer widget from Notification Center's **Edit Widgets** screen. Safari extensions must be enabled in Safari settings.
+- When activity continues outside the configured work window, WorkTimer sends an actionable notification asking whether the time is **Work**, **Private**, or should be reviewed **Later**. Notifications must be allowed in macOS System Settings.
 
 ## Data
 - Stored in your user profile: `~/Library/Application Support/WorkTimer/worktimer.sqlite` (plus `Backups/`). Backups are plain SQLite and **not encrypted**.
@@ -22,8 +25,8 @@ Private beats work on ties; domain rules beat app rules. Default private: nu.nl,
 ## Corrections
 Corrections are an overlay (`manual_adjustments`); captured evidence is never rewritten, and corrections can be undone.
 
-## Needs Xcode / a real Mac (sources provided, not buildable here)
-`Extensions/` holds the Safari Web Extension (hostname only), its native handler, the WidgetKit widget and an XcodeGen `project.yml`. They need Xcode, a signing team and the App Group `group.nl.worktimer.shared`. The handler and widget sources type-check against the core library. The SwiftPM app cannot host widgets, so `reloadWidgets` is a no-op until the widget extension is installed via Xcode.
+## Xcode extensions
+`Extensions/` holds the Safari Web Extension (hostname only), its native handler, the WidgetKit widget and an XcodeGen `project.yml`. The SwiftPM-built app does not contain these extensions; use the XcodeGen watcher above for the full app. Widgets require the extension to be installed and added in Notification Center.
 
 ## Not measured
 CPU, memory and energy targets, 8-hour soak, DST on a real clock, real sleep/lock, Safari behaviour and widget refresh budgets need manual validation (plan section 10, milestones A and H).

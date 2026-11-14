@@ -7,6 +7,26 @@ import UserNotifications
 import WidgetKit
 import WorkTimerCore
 
+private final class NotificationHandler: NSObject, UNUserNotificationCenterDelegate {
+    nonisolated func userNotificationCenter(_ center: UNUserNotificationCenter,
+                                            didReceive response: UNNotificationResponse) async {
+        let answer: OutsideAnswer?
+        switch response.actionIdentifier {
+        case "AFTER_HOURS_WORK": answer = .work
+        case "AFTER_HOURS_PRIVATE": answer = .private
+        case "AFTER_HOURS_LATER": answer = .later
+        default: answer = nil
+        }
+        guard let answer else { return }
+        await AppModel.shared.answerOutside(answer)
+    }
+
+    nonisolated func userNotificationCenter(_ center: UNUserNotificationCenter,
+                                            willPresent notification: UNNotification) async -> UNNotificationPresentationOptions {
+        [.banner, .sound]
+    }
+}
+
 @MainActor
 final class AppModel: ObservableObject {
     static let shared = AppModel()
@@ -34,6 +54,8 @@ final class AppModel: ObservableObject {
     private var ingestionSuspended = false
     private var lastSnapshot: Millis = 0
     private var lastBreakActive = false
+    private var lastOutsidePrompt = false
+    private let notificationHandler = NotificationHandler()
 
     static func wallNow() -> Millis { Millis(Date().timeIntervalSince1970 * 1000) }
     private func stamp() -> Stamp { Stamp(wall: Self.wallNow(), mono: ProcessInfo.processInfo.systemUptime) }
@@ -70,6 +92,7 @@ final class AppModel: ObservableObject {
             let app = NSWorkspace.shared.frontmostApplication?.bundleIdentifier
             try engine.handle(.launch(app: app, idleSeconds: Self.idleSeconds()), at: stamp())
             observeSystem()
+            configureNotifications()
             requestNotificationAuthorization()
             launchAtLogin = SMAppService.mainApp.status == .enabled
             let t = Timer(timeInterval: 5, repeats: true) { [weak self] _ in Task { @MainActor in self?.tick() } }
@@ -142,6 +165,7 @@ final class AppModel: ObservableObject {
         now = Self.wallNow()
         guard let calc = calculator, let ledger else { return }
         status = engine?.liveStatus()
+        evaluateAfterHoursPrompt()
         let d = calc.schedule.localDate(now)
         today = calc.day(d, now: now)
         week = calc.week(containing: d, now: now)
@@ -171,6 +195,30 @@ final class AppModel: ObservableObject {
 
     private var canNotify: Bool { Bundle.main.bundleIdentifier != nil }
 
+    private func configureNotifications() {
+        guard canNotify else { return }
+        let work = UNNotificationAction(identifier: "AFTER_HOURS_WORK", title: "Work")
+        let privateTime = UNNotificationAction(identifier: "AFTER_HOURS_PRIVATE", title: "Private")
+        let later = UNNotificationAction(identifier: "AFTER_HOURS_LATER", title: "Ask Later")
+        let category = UNNotificationCategory(identifier: "AFTER_HOURS",
+                                              actions: [work, privateTime, later],
+                                              intentIdentifiers: [])
+        let center = UNUserNotificationCenter.current()
+        center.delegate = notificationHandler
+        center.setNotificationCategories([category])
+    }
+
+    private func evaluateAfterHoursPrompt() {
+        let isPrompting = status?.outsidePrompt == true
+        if isPrompting && !lastOutsidePrompt {
+            notify(title: "What are you doing?",
+                   body: "You’re active outside your working hours. Count this as work or private time?",
+                   id: "after-hours-\(status?.since ?? now)",
+                   category: "AFTER_HOURS")
+        }
+        lastOutsidePrompt = isPrompting
+    }
+
     func requestNotificationAuthorization() {
         guard canNotify else { return }
         UNUserNotificationCenter.current().requestAuthorization(options: [.alert, .sound]) { [weak self] granted, _ in
@@ -178,10 +226,11 @@ final class AppModel: ObservableObject {
         }
     }
 
-    func notify(title: String, body: String, id: String = UUID().uuidString) {
+    func notify(title: String, body: String, id: String = UUID().uuidString, category: String? = nil) {
         guard canNotify else { return }
         let c = UNMutableNotificationContent()
         c.title = title; c.body = body; c.sound = .default
+        if let category { c.categoryIdentifier = category }
         UNUserNotificationCenter.current().add(UNNotificationRequest(identifier: id, content: c, trigger: nil))
     }
 
@@ -206,7 +255,11 @@ final class AppModel: ObservableObject {
     // MARK: Tracking controls
 
     func togglePause() { send(paused ? .resume : .pause); refresh() }
-    func answerOutside(_ a: OutsideAnswer) { send(.answerOutside(a)); refresh() }
+    func answerOutside(_ a: OutsideAnswer) {
+        send(.answerOutside(a))
+        UNUserNotificationCenter.current().removeDeliveredNotifications(withIdentifiers: ["after-hours-\(status?.since ?? now)"])
+        refresh()
+    }
 
     // MARK: Corrections
 

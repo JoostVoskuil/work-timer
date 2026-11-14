@@ -36,6 +36,31 @@ private func color(_ c: WorkTimerCore.Category) -> Color {
     }
 }
 
+private enum WorkStyle {
+    static let accent = Color(red: 0.06, green: 0.48, blue: 0.44)
+}
+
+private struct SectionHeading: View {
+    let title: String
+    let subtitle: String
+    let symbol: String
+
+    var body: some View {
+        HStack(spacing: 12) {
+            Image(systemName: symbol)
+                .font(.system(size: 17, weight: .semibold))
+                .foregroundStyle(WorkStyle.accent)
+                .frame(width: 38, height: 38)
+                .background(WorkStyle.accent.opacity(0.12), in: RoundedRectangle(cornerRadius: 11))
+            VStack(alignment: .leading, spacing: 2) {
+                Text(title).font(.title2.weight(.semibold))
+                Text(subtitle).font(.caption).foregroundStyle(.secondary)
+            }
+            Spacer()
+        }
+    }
+}
+
 // MARK: Menu bar
 
 struct MenuBarLabel: View {
@@ -43,7 +68,7 @@ struct MenuBarLabel: View {
     var body: some View {
         if model.paused { Label("Paused", systemImage: "pause.circle") }
         else if !model.health.storageOK { Label("Storage error", systemImage: "exclamationmark.triangle") }
-        else { Text("Work \(hm(model.today.work))") }
+        else { Label(hm(model.today.work), systemImage: "clock.badge.checkmark") }
     }
 }
 
@@ -52,12 +77,30 @@ struct MenuContent: View {
     @Environment(\.openWindow) private var openWindow
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 8) {
+        VStack(alignment: .leading, spacing: 14) {
+            HStack {
+                Label("WorkTimer", systemImage: "clock.badge.checkmark")
+                    .font(.headline)
+                Spacer()
+                Text(Date().formatted(.dateTime.weekday(.wide)))
+                    .font(.caption).foregroundStyle(.secondary)
+            }
             if let err = model.fatalError { Text(err).foregroundStyle(.red) }
-            Text("Today \(hm(model.today.work)) of \(hm(model.today.targetMillis))").font(.headline)
+            HStack(alignment: .firstTextBaseline, spacing: 5) {
+                Text(hm(model.today.work)).font(.system(size: 34, weight: .semibold, design: .rounded)).monospacedDigit()
+                Text("/ \(hm(model.today.targetMillis)) today").foregroundStyle(.secondary)
+            }
+            if model.today.targetMillis > 0 {
+                ProgressView(value: max(0, min(Double(model.today.work) / Double(model.today.targetMillis), 1)))
+                    .tint(WorkStyle.accent)
+            }
             if let w = model.week {
-                Text("Week \(hm(w.work)) / \(hm(w.fullWeekTarget)) · balance \(hm(w.toDateBalance, signed: true))\(w.currentDayIncomplete ? " (today incomplete)" : "")")
-                    .font(.caption)
+                HStack {
+                    Label("Week \(hm(w.work)) / \(hm(w.fullWeekTarget))", systemImage: "calendar")
+                    Spacer()
+                    Text(hm(w.toDateBalance, signed: true))
+                }.font(.caption).foregroundStyle(.secondary)
+                if w.currentDayIncomplete { Text("Today’s target is included in balance.").font(.caption2).foregroundStyle(.secondary) }
             }
             if let s = model.status {
                 Label("\(s.category.title): \(s.reason.explanation)", systemImage: "circle.fill").foregroundStyle(color(s.category)).font(.caption)
@@ -77,12 +120,19 @@ struct MenuContent: View {
                 Text("Pomodoro \(model.pomodoro.phase.rawValue): \(hm(model.pomodoroRemaining))").font(.caption)
             }
             Divider()
-            Button(model.paused ? "Resume tracking" : "Pause tracking") { model.togglePause() }
-            Button("Open WorkTimer…") { openWindow(id: "main"); NSApp.activate(ignoringOtherApps: true) }
-            Button("Quit") { model.shutdown(); NSApp.terminate(nil) }
+            Button { openWindow(id: "main"); NSApp.activate(ignoringOtherApps: true) } label: {
+                Label("Open WorkTimer", systemImage: "macwindow")
+            }.buttonStyle(.borderedProminent).tint(WorkStyle.accent).frame(maxWidth: .infinity, alignment: .leading)
+            HStack {
+                Button { model.togglePause() } label: {
+                    Label(model.paused ? "Resume tracking" : "Pause tracking", systemImage: model.paused ? "play.fill" : "pause.fill")
+                }
+                Spacer()
+                Button("Quit") { model.shutdown(); NSApp.terminate(nil) }
+            }
             Text("Quitting stops tracking; time while the app is closed shows as unknown.").font(.caption2).foregroundStyle(.secondary)
         }
-        .padding(12).frame(width: 320)
+        .padding(18).frame(width: 340)
     }
 }
 
@@ -92,14 +142,15 @@ struct MainView: View {
     @ObservedObject var model: AppModel
     var body: some View {
         TabView {
-            TodayView(model: model).tabItem { Label("Today", systemImage: "clock") }
-            ReportsView(model: model).tabItem { Label("Reports", systemImage: "chart.bar") }
-            ReviewView(model: model).tabItem { Label("Review (\(model.reviews.count))", systemImage: "questionmark.circle") }
+            TodayView(model: model).tabItem { Label("Today", systemImage: "clock.badge.checkmark") }
+            ReportsView(model: model).tabItem { Label("Reports", systemImage: "chart.bar.xaxis") }
+            ReviewView(model: model).tabItem { Label("Review (\(model.reviews.count))", systemImage: "tray.full") }
             PomodoroView(model: model).tabItem { Label("Pomodoro", systemImage: "timer") }
-            SettingsView(model: model).tabItem { Label("Settings", systemImage: "gear") }
+            SettingsView(model: model).tabItem { Label("Settings", systemImage: "slider.horizontal.3") }
         }
         .frame(minWidth: 760, minHeight: 520)
-        .padding()
+        .padding(20)
+        .tint(WorkStyle.accent)
     }
 }
 
@@ -107,22 +158,32 @@ struct TodayView: View {
     @ObservedObject var model: AppModel
     @Local private var showManual = false
     var body: some View {
-        VStack(alignment: .leading, spacing: 12) {
-            HStack(spacing: 24) {
+        VStack(alignment: .leading, spacing: 16) {
+            SectionHeading(title: "Today", subtitle: Date().formatted(date: .complete, time: .omitted), symbol: "sun.max")
+            HStack(spacing: 0) {
                 stat("Work", hm(model.today.work))
                 stat("Target", hm(model.today.targetMillis))
                 stat("Balance", hm(model.today.balance, signed: true) + (model.today.isToday ? " (incomplete)" : ""))
                 stat("Pending", hm(model.today.pending))
             }
+            .padding(16)
+            .background(WorkStyle.accent.opacity(0.08), in: RoundedRectangle(cornerRadius: 14))
+            HStack {
+                Text("Activity").font(.headline)
+                Spacer()
+                Button { showManual = true } label: { Label("Add manual entry", systemImage: "plus") }
+            }
             let segs = model.calculator?.segments(in: model.calculator!.schedule.daySpan(model.today.date)) ?? []
             List(segs.reversed(), id: \.span.start) { s in
-                HStack {
+                HStack(spacing: 12) {
                     Circle().fill(color(s.category)).frame(width: 10, height: 10)
-                    Text("\(timeText(s.span.start))–\(timeText(s.span.end))").monospacedDigit()
-                    Text(s.category.title).bold()
-                    Text(s.domain ?? s.app ?? "").foregroundStyle(.secondary)
+                    Text("\(timeText(s.span.start))–\(timeText(s.span.end))").monospacedDigit().foregroundStyle(.secondary)
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text(s.category.title).fontWeight(.semibold)
+                        if let detail = s.domain ?? s.app { Text(detail).font(.caption).foregroundStyle(.secondary).lineLimit(1) }
+                    }
                     Spacer()
-                    Text(s.explanation).font(.caption).foregroundStyle(.secondary)
+                    Text(s.explanation).font(.caption).foregroundStyle(.secondary).lineLimit(2)
                     if s.pending { Text("pending").font(.caption).foregroundStyle(.orange) }
                     Menu("Change") {
                         ForEach([WorkTimerCore.Category.work, .privateTime, .breakTime], id: \.self) { c in
@@ -130,14 +191,25 @@ struct TodayView: View {
                         }
                         if case .correction(let id) = s.source { Button("Undo correction") { model.undo(id) } }
                     }.fixedSize()
+                }.padding(.vertical, 4)
+            }
+            .overlay {
+                if segs.isEmpty {
+                    VStack(spacing: 8) {
+                        Image(systemName: "clock.arrow.circlepath").font(.title).foregroundStyle(.secondary)
+                        Text("No activity yet").font(.headline)
+                        Text("Tracked activity will appear here.").font(.caption).foregroundStyle(.secondary)
+                    }.allowsHitTesting(false)
                 }
             }
-            Button("Add manual work entry…") { showManual = true }
         }
         .sheet(isPresented: $showManual) { ManualEntryView(model: model, isPresented: $showManual) }
     }
     private func stat(_ t: String, _ v: String) -> some View {
-        VStack(alignment: .leading) { Text(t).font(.caption).foregroundStyle(.secondary); Text(v).font(.title2).monospacedDigit() }
+        VStack(alignment: .leading, spacing: 5) {
+            Text(t).font(.caption).foregroundStyle(.secondary)
+            Text(v).font(.system(size: 19, weight: .semibold, design: .rounded)).monospacedDigit().lineLimit(1).minimumScaleFactor(0.75)
+        }.frame(maxWidth: .infinity, alignment: .leading)
     }
 }
 
@@ -173,6 +245,7 @@ struct ReportsView: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
+            SectionHeading(title: "Reports", subtitle: "Your work over time", symbol: "chart.bar.xaxis")
             HStack {
                 Picker("", selection: $scope) { Text("Week").tag(0); Text("Month").tag(1) }.pickerStyle(.segmented).frame(width: 180)
                 DatePicker("", selection: $anchor, displayedComponents: .date).labelsHidden()
@@ -206,7 +279,7 @@ struct ReportsView: View {
         Chart(days, id: \.date) { d in
             BarMark(x: .value("Day", d.date.description), y: .value("Hours", Double(d.work) / Double(Duration.hour)))
             RuleMark(y: .value("Target", Double(d.targetMillis) / Double(Duration.hour))).foregroundStyle(.secondary)
-        }.frame(height: 200)
+        }.foregroundStyle(WorkStyle.accent).frame(height: 200)
     }
 
     private func attribution(_ calc: ReportCalculator, _ span: Span) -> some View {
@@ -233,8 +306,15 @@ struct ReportsView: View {
 struct ReviewView: View {
     @ObservedObject var model: AppModel
     var body: some View {
-        if model.reviews.isEmpty { Text("Nothing to review.").foregroundStyle(.secondary) }
-        else {
+        VStack(alignment: .leading, spacing: 16) {
+          SectionHeading(title: "Review", subtitle: "Resolve time that needs your input", symbol: "tray.full")
+          if model.reviews.isEmpty {
+              VStack(spacing: 8) {
+                  Image(systemName: "checkmark.circle").font(.system(size: 36)).foregroundStyle(WorkStyle.accent)
+                  Text("All caught up").font(.headline)
+                  Text("Time needing review will appear here.").foregroundStyle(.secondary)
+              }.frame(maxWidth: .infinity, maxHeight: .infinity)
+          } else {
             List(model.reviews, id: \.id) { r in
                 HStack {
                     VStack(alignment: .leading) {
@@ -247,6 +327,7 @@ struct ReviewView: View {
                     Button("Private") { model.resolve(r, as: .privateTime) }
                     Button("Later") { model.resolve(r, as: .later) }
                 }
+              }
             }
         }
     }
@@ -257,12 +338,13 @@ struct ReviewView: View {
 struct PomodoroView: View {
     @ObservedObject var model: AppModel
     var body: some View {
-        VStack(spacing: 14) {
+        VStack(spacing: 16) {
+            Image(systemName: "timer").font(.system(size: 28, weight: .medium)).foregroundStyle(WorkStyle.accent)
             Text(model.pomodoro.status == .stopped ? "Not running" : "\(model.pomodoro.phase.rawValue.capitalized) · \(model.pomodoro.status.rawValue)").font(.headline)
-            Text(hm(model.pomodoroRemaining)).font(.system(size: 56, weight: .light)).monospacedDigit()
+            Text(hm(model.pomodoroRemaining)).font(.system(size: 64, weight: .semibold, design: .rounded)).monospacedDigit()
             Text("Completed focus sessions: \(model.pomodoro.completedFocus)")
             HStack {
-                Button("Start focus") { model.pomodoroStartFocus() }
+                Button("Start focus") { model.pomodoroStartFocus() }.buttonStyle(.borderedProminent)
                 Button("Start break") { model.pomodoroStartBreak() }
                 if model.pomodoro.status == .running { Button("Pause") { model.pomodoroPause() } }
                 if model.pomodoro.status == .paused { Button("Resume") { model.pomodoroResume() } }
@@ -288,6 +370,7 @@ struct SettingsView: View {
     var body: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 18) {
+                SectionHeading(title: "Settings", subtitle: "Tracking, rules and your data", symbol: "slider.horizontal.3")
                 GroupBox("General") {
                     VStack(alignment: .leading) {
                         Toggle("Launch at login", isOn: Binding(get: { model.launchAtLogin }, set: { model.setLaunchAtLogin($0) }))

@@ -2,3 +2,4 @@
 build/
 Extensions/WorkTimer.xcodeproj/
 Extensions/*-Info.plist
+.swiftpm/

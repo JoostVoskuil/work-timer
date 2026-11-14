@@ -31,13 +31,21 @@ struct WidgetView: View {
     var body: some View {
         switch entry.load {
         case .unavailable:
-            VStack { Image(systemName: "exclamationmark.triangle"); Text("Data unavailable").font(.caption); Text("Open WorkTimer").font(.caption2) }
+            VStack(alignment: .leading, spacing: 8) {
+                Label("WorkTimer", systemImage: "clock.badge.checkmark").font(.headline)
+                Spacer()
+                Label("Data unavailable", systemImage: "exclamationmark.triangle").font(.caption)
+                Text("Open WorkTimer").font(.caption2).foregroundStyle(.secondary)
+            }.frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .leading).padding()
         case .ok(let s):
             let age = Date().timeIntervalSince1970 * 1000 - Double(s.generatedAt)
-            VStack(alignment: .leading, spacing: 4) {
-                Text("Today \(hm(s.todayWork)) / \(hm(s.todayTarget))").font(.headline)
-                Text("Week \(hm(s.weekWork)) / \(hm(s.weekFullTarget))").font(.subheadline)
-                Text("Balance \(hm(s.balanceToDate, signed: true))").font(.subheadline)
+            VStack(alignment: .leading, spacing: 5) {
+                Label("WorkTimer", systemImage: "clock.badge.checkmark").font(.caption.weight(.semibold)).foregroundStyle(.secondary)
+                Text(hm(s.todayWork)).font(.system(size: 26, weight: .semibold, design: .rounded)).monospacedDigit()
+                Text("Today / \(hm(s.todayTarget))").font(.caption).foregroundStyle(.secondary)
+                Divider()
+                Text("Week \(hm(s.weekWork)) / \(hm(s.weekFullTarget))").font(.caption)
+                Text("Balance \(hm(s.balanceToDate, signed: true))").font(.caption.weight(.medium))
                 Text(s.balanceLabel).font(.caption2).foregroundStyle(.secondary)
                 if s.pending > 0 { Text("\(hm(s.pending)) pending review").font(.caption2).foregroundStyle(.orange) }
                 if age > 30 * 60_000 || !s.health.isHealthy { Text("May be outdated · updated \(Date(timeIntervalSince1970: Double(s.generatedAt) / 1000).formatted(date: .omitted, time: .shortened))").font(.caption2).foregroundStyle(.red) }

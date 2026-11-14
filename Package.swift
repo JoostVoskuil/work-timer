@@ -10,6 +10,6 @@ let package = Package(
         .testTarget(name: "WorkTimerCoreTests", dependencies: ["WorkTimerCore"],
                     // Command Line Tools ship the Swift Testing macro plugin outside the default search path.
                     swiftSettings: [.unsafeFlags(["-plugin-path", "/Library/Developer/CommandLineTools/usr/lib/swift/host/plugins/testing"])]),
-        .executableTarget(name: "WorkTimerApp", dependencies: ["WorkTimerCore"]),
+        .executableTarget(name: "WorkTimerApp", dependencies: ["WorkTimerCore"], exclude: ["Resources"]),
     ]
 )
