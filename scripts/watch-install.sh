@@ -103,6 +103,10 @@ build_install_launch() {
   rm -rf "$INSTALL_APP"
   ditto "$BUILT_APP" "$INSTALL_APP" || return $?
   log "Installed $INSTALL_APP"
+  /System/Library/Frameworks/CoreServices.framework/Frameworks/LaunchServices.framework/Support/lsregister \
+    -f "$INSTALL_APP" || return $?
+  /usr/bin/pluginkit -a "$INSTALL_APP/Contents/PlugIns/Widgets.appex" || return $?
+  log "Refreshed Launch Services and registered the widget extension"
   open -n "$INSTALL_APP" || return $?
   log "Started WorkTimer. Add its widget from Notification Center's Edit Widgets screen."
 }
