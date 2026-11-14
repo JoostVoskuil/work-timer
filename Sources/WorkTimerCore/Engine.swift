@@ -394,4 +394,7 @@ public final class TrackingEngine {
 
     public var isRunning: Bool { started }
     public var isTrackingPaused: Bool { paused }
+    public var pendingOutsideReviewID: Int64? {
+        outside?.answer == nil ? outside?.reviewID : nil
+    }
 }

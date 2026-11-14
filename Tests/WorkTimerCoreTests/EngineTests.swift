@@ -176,6 +176,19 @@ private final class Rig {
         #expect(r.calc(now: now).day(fri, now: now).pending == 0)
     }
 
+    @Test func liveOutsideReviewCanBeAnsweredBeforeItEnds() throws {
+        let r = try Rig()
+        try r.send(.launch(app: "a", idleSeconds: 0), at(2025, 6, 13, 18))
+        let review = try #require(r.ledger.reviews(status: .pending).first { $0.type == .outsideHours })
+        #expect(review.end == nil)
+        #expect(r.engine.pendingOutsideReviewID == review.id)
+        try r.send(.answerOutside(.work), at(2025, 6, 13, 18, 15))
+        #expect(r.engine.pendingOutsideReviewID == nil)
+        #expect(r.ledger.reviews(status: .pending).isEmpty)
+        try r.send(.tick, at(2025, 6, 13, 18, 30))
+        #expect(r.total(.work, fri, now: at(2025, 6, 13, 18, 30)) == 30 * Duration.minute)
+    }
+
     @Test func weekendIsNotWork() throws {
         let r = try Rig()
         try r.send(.launch(app: "a", idleSeconds: 0), at(2025, 6, 14, 10))
@@ -215,6 +228,20 @@ private final class Rig {
 }
 
 @Suite struct AccountingTests {
+    @Test func reviewingIdleAsWorkIncludesPhoneCallWithoutRewritingEvidence() throws {
+        let r = try Rig()
+        let start = at(2025, 6, 13, 10)
+        let end = at(2025, 6, 13, 10, 30)
+        let span = Span(start, end)
+        _ = try r.ledger.append(ActivityInterval(span: span, category: .idle, reason: .idleTimeout))
+        let id = try r.ledger.addReview(ReviewItem(type: .idle, start: start, end: end, createdAt: end, dedupeKey: "test-idle"))
+        let review = try #require(r.ledger.reviews(status: .pending).first { $0.id == id })
+        try ReviewResolver(ledger: r.ledger).resolve(review, as: .work, now: end)
+        #expect(r.total(.work, LocalDate(2025, 6, 13), now: end) == 30 * Duration.minute)
+        #expect(r.ledger.reviews(status: .pending).isEmpty)
+        #expect(try r.ledger.intervals(in: span).first?.category == .idle)
+    }
+
     @Test func weekToDateBalance() throws {
         let r = try Rig()
         // Mon-Wed 8h each, Wed noon "now"? Use Thursday 08:00 as now: 3 complete days target 24h.

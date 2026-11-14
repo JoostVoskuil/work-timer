@@ -42,6 +42,7 @@ final class AppModel: ObservableObject {
     @Published var health = HealthStatus()
     @Published var launchAtLogin = false
     @Published var fatalError: String?
+    @Published var reviewError: String?
     @Published var notificationTestStatus: String?
     @Published var isSendingTestNotification = false
 
@@ -343,10 +344,31 @@ final class AppModel: ObservableObject {
 
     // MARK: Corrections
 
+    func canAnswerLiveReview(_ review: ReviewItem) -> Bool {
+        review.id != nil && review.id == engine?.pendingOutsideReviewID
+    }
+
     func resolve(_ r: ReviewItem, as a: ReviewAnswer) {
-        guard let ledger else { return }
-        try? ReviewResolver(ledger: ledger).resolve(r, as: a, now: Self.wallNow())
-        refresh()
+        reviewError = nil
+        guard let ledger else {
+            reviewError = "Reviews could not be saved because storage is unavailable."
+            return
+        }
+        do {
+            if r.end == nil {
+                guard canAnswerLiveReview(r), a == .work || a == .privateTime else {
+                    reviewError = "This period is still open. Wait until it ends before classifying it."
+                    return
+                }
+                _ = try engine?.handle(.answerOutside(a == .work ? .work : .private), at: stamp())
+            } else {
+                try ReviewResolver(ledger: ledger).resolve(r, as: a, now: Self.wallNow())
+            }
+            refresh()
+        } catch {
+            reviewError = "Could not save your answer: \(error.localizedDescription). Please try again."
+            NSLog("%@", reviewError ?? "Could not save review")
+        }
     }
 
     func reclassify(_ span: Span, as c: WorkTimerCore.Category, note: String) {

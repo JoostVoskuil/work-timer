@@ -315,29 +315,88 @@ struct ReviewView: View {
     @ObservedObject var model: AppModel
     var body: some View {
         VStack(alignment: .leading, spacing: 16) {
-          SectionHeading(title: "Review", subtitle: "Resolve time that needs your input", symbol: "tray.full")
-          if model.reviews.isEmpty {
-              VStack(spacing: 8) {
-                  Image(systemName: "checkmark.circle").font(.system(size: 36)).foregroundStyle(WorkStyle.accent)
-                  Text("All caught up").font(.headline)
-                  Text("Time needing review will appear here.").foregroundStyle(.secondary)
-              }.frame(maxWidth: .infinity, maxHeight: .infinity)
-          } else {
-            List(model.reviews, id: \.id) { r in
-                HStack {
-                    VStack(alignment: .leading) {
-                        Text(r.type == .idle ? "Idle period" : r.type == .gap ? "Unknown gap" : "Outside work hours").bold()
-                        Text("\(timeText(r.start))–\(r.end.map(timeText) ?? "ongoing")").font(.caption).monospacedDigit()
+            SectionHeading(title: "Review", subtitle: "You decide what counts as work", symbol: "tray.full")
+            Text("WorkTimer cannot tell a phone call from a break, or work from private activity after hours. These periods are not counted as work until you confirm them.")
+                .foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
+            DisclosureGroup("What needs reviewing?") {
+                VStack(alignment: .leading, spacing: 8) {
+                    Text("No input: you may have been in a meeting or on a call.")
+                    Text("Tracking gap: the app was closed, interrupted, or could not observe activity.")
+                    Text("Outside working hours: activity needs your confirmation before it counts as work.")
+                    Text("Choose Work to include the period in your totals. Break and Private exclude it. Leave an item unanswered if you are unsure; no answer is applied automatically.")
+                }.font(.callout).foregroundStyle(.secondary).padding(.top, 8)
+            }
+            if let error = model.reviewError {
+                Label(error, systemImage: "exclamationmark.triangle")
+                    .foregroundStyle(.red).fixedSize(horizontal: false, vertical: true)
+            }
+            if model.reviews.isEmpty {
+                VStack(spacing: 8) {
+                    Image(systemName: "checkmark.circle").font(.system(size: 36)).foregroundStyle(WorkStyle.accent)
+                    Text("All caught up").font(.headline)
+                    Text("No uncertain periods need your input.").foregroundStyle(.secondary)
+                }.frame(maxWidth: .infinity, maxHeight: .infinity)
+            } else {
+                List(model.reviews, id: \.id) { r in
+                    VStack(alignment: .leading, spacing: 10) {
+                        HStack(alignment: .firstTextBaseline) {
+                            Label(title(r), systemImage: symbol(r)).font(.headline)
+                            Spacer()
+                            Text(r.end.map { "\(hm(max(0, $0 - r.start))) h" } ?? "Ongoing")
+                                .font(.callout).monospacedDigit().foregroundStyle(.secondary)
+                        }
+                        Text(period(r)).font(.caption).foregroundStyle(.secondary)
+                        Text(explanation(r)).font(.callout).fixedSize(horizontal: false, vertical: true)
+                        HStack {
+                            Button("Count as work") { model.resolve(r, as: .work) }
+                                .disabled(r.end == nil && !model.canAnswerLiveReview(r))
+                            Button("Break") { model.resolve(r, as: .breakTime) }.disabled(r.end == nil)
+                            Button("Private") { model.resolve(r, as: .privateTime) }
+                                .disabled(r.end == nil && !model.canAnswerLiveReview(r))
+                            Spacer()
+                            Text("Not counted as work").font(.caption).foregroundStyle(.secondary)
+                        }
+                        if r.end == nil {
+                            Text(model.canAnswerLiveReview(r)
+                                 ? "Work or Private also applies to the rest of this after-hours session."
+                                 : "This period has no end yet and cannot be answered here.")
+                                .font(.caption).foregroundStyle(.secondary)
+                        }
                     }
-                    Spacer()
-                    Button("Work") { model.resolve(r, as: .work) }
-                    Button("Break") { model.resolve(r, as: .breakTime) }
-                    Button("Private") { model.resolve(r, as: .privateTime) }
-                    Button("Later") { model.resolve(r, as: .later) }
-                }
-              }
+                    .padding(.vertical, 10)
+                }.listStyle(.inset)
             }
         }
+    }
+
+    private func title(_ review: ReviewItem) -> String {
+        switch review.type {
+        case .idle: return "Were you working away from the keyboard?"
+        case .gap: return "What happened while tracking was unavailable?"
+        case .outsideHours: return "Was this after-hours activity work?"
+        }
+    }
+
+    private func symbol(_ review: ReviewItem) -> String {
+        switch review.type {
+        case .idle: return "keyboard"
+        case .gap: return "questionmark.circle"
+        case .outsideHours: return "moon"
+        }
+    }
+
+    private func explanation(_ review: ReviewItem) -> String {
+        switch review.type {
+        case .idle: return "No keyboard or mouse input was detected. Count this as work if you were on a call or doing other work."
+        case .gap: return "WorkTimer has no reliable activity record for this period. Only count it as work if you know you were working."
+        case .outsideHours: return "This activity was outside your configured working hours. Counting it as work keeps existing private-app and private-domain exclusions."
+        }
+    }
+
+    private func period(_ review: ReviewItem) -> String {
+        let start = Date(timeIntervalSince1970: Double(review.start) / 1000)
+        let end = review.end.map { Date(timeIntervalSince1970: Double($0) / 1000).formatted(date: .abbreviated, time: .shortened) } ?? "now"
+        return "\(start.formatted(date: .abbreviated, time: .shortened)) – \(end)"
     }
 }
 

@@ -28,6 +28,9 @@ Private beats work on ties; domain rules beat app rules. Default private: nu.nl,
 ## Corrections
 Corrections are an overlay (`manual_adjustments`); captured evidence is never rewritten, and corrections can be undone.
 
+## Review
+Review explains uncertain periods: no keyboard/mouse input (possibly a call), tracking gaps, and unanswered outside-hours activity. Each item shows dates, duration, why confirmation is needed, and classification actions. These periods are excluded from work until confirmed. Leaving an item unanswered keeps it pending. Active after-hours sessions can be answered directly in Review; Work or Private also applies to the remainder of that session.
+
 ## Xcode extensions
 `Extensions/` holds the Safari Web Extension (hostname only), its native handler, the WidgetKit widget and an XcodeGen `project.yml`. The SwiftPM-built app does not contain these extensions; use the XcodeGen watcher above for the full app. Widgets require the extension to be installed and added in Notification Center.
 Both extensions enable App Sandbox, which macOS requires for PlugInKit discovery. The installer verifies that the installed widget appears in PlugInKit, rather than treating a successful registration command as proof of discovery. For desktop placement, right-click the desktop, choose **Edit Widgets**, and search for **WorkTimer**.
