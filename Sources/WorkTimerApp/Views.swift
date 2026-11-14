@@ -86,6 +86,14 @@ struct MenuContent: View {
                     .font(.caption).foregroundStyle(.secondary)
             }
             if let err = model.fatalError { Text(err).foregroundStyle(.red) }
+            if model.health.notificationsOK == false {
+                HStack {
+                    Label("Notifications are off", systemImage: "bell.slash")
+                        .font(.caption).foregroundStyle(.orange)
+                    Spacer()
+                    Button("Enable") { model.openNotificationSettings() }
+                }
+            }
             HStack(alignment: .firstTextBaseline, spacing: 5) {
                 Text(hm(model.today.work)).font(.system(size: 34, weight: .semibold, design: .rounded)).monospacedDigit()
                 Text("/ \(hm(model.today.targetMillis)) today").foregroundStyle(.secondary)
@@ -382,6 +390,9 @@ struct SettingsView: View {
                     VStack(alignment: .leading) {
                         Text("Storage: \(model.health.storageOK ? "OK" : "Problem")")
                         Text("Notifications: \(model.health.notificationsOK.map { $0 ? "Allowed" : "Not allowed" } ?? "Unknown")")
+                        if model.health.notificationsOK == false {
+                            Button("Open Notification Settings") { model.openNotificationSettings() }
+                        }
                         ForEach(model.health.messages, id: \.self) { Text($0).foregroundStyle(.red) }
                     }.frame(maxWidth: .infinity, alignment: .leading)
                 }

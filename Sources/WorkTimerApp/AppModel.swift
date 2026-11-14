@@ -55,6 +55,7 @@ final class AppModel: ObservableObject {
     private var lastSnapshot: Millis = 0
     private var lastBreakActive = false
     private var lastOutsidePrompt = false
+    private var didPromptNotificationSettings = false
     private let notificationHandler = NotificationHandler()
 
     static func wallNow() -> Millis { Millis(Date().timeIntervalSince1970 * 1000) }
@@ -221,9 +222,43 @@ final class AppModel: ObservableObject {
 
     func requestNotificationAuthorization() {
         guard canNotify else { return }
-        UNUserNotificationCenter.current().requestAuthorization(options: [.alert, .sound]) { [weak self] granted, _ in
-            Task { @MainActor in self?.health.notificationsOK = granted }
+        let center = UNUserNotificationCenter.current()
+        center.getNotificationSettings { [weak self] settings in
+            switch settings.authorizationStatus {
+            case .authorized, .provisional, .ephemeral:
+                Task { @MainActor in self?.health.notificationsOK = true }
+            case .notDetermined:
+                center.requestAuthorization(options: [.alert, .sound]) { granted, _ in
+                    Task { @MainActor in self?.health.notificationsOK = granted }
+                }
+            case .denied:
+                Task { @MainActor in
+                    guard let self else { return }
+                    self.health.notificationsOK = false
+                    self.promptForNotificationSettings()
+                }
+            @unknown default:
+                Task { @MainActor in self?.health.notificationsOK = false }
+            }
         }
+    }
+
+    private func promptForNotificationSettings() {
+        guard !didPromptNotificationSettings else { return }
+        didPromptNotificationSettings = true
+        let alert = NSAlert()
+        alert.messageText = "Enable WorkTimer notifications?"
+        alert.informativeText = "Notifications are needed to ask whether activity outside your working hours is work or private time."
+        alert.alertStyle = .informational
+        alert.addButton(withTitle: "Open Notification Settings")
+        alert.addButton(withTitle: "Not Now")
+        NSApp.activate(ignoringOtherApps: true)
+        if alert.runModal() == .alertFirstButtonReturn { openNotificationSettings() }
+    }
+
+    func openNotificationSettings() {
+        guard let url = URL(string: "x-apple.systempreferences:com.apple.Notifications-Settings.extension") else { return }
+        NSWorkspace.shared.open(url)
     }
 
     func notify(title: String, body: String, id: String = UUID().uuidString, category: String? = nil) {
