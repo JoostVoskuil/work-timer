@@ -1,7 +1,7 @@
 # XcodeGen spec (https://github.com/yonaskolb/XcodeGen). Requires full Xcode and an Apple Developer team.
 # Generates an Xcode project wrapping the SwiftPM core with the app, Safari extension and widget targets, all in one App Group.
 name: WorkTimer
-options: { deploymentTarget: { macOS: "13.0" } }
+options: { deploymentTarget: { macOS: "27.0" } }
 packages:
   WorkTimer: { path: .. }
 settings: { base: { SWIFT_VERSION: "6.0", MARKETING_VERSION: "1.0", CURRENT_PROJECT_VERSION: "1" } }

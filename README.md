@@ -2,6 +2,8 @@
 
 Local-first macOS menu-bar work-hours tracker. No network, no cloud, no screenshots, no keystroke content.
 
+Requires macOS 27 or later and Xcode with the macOS 27 SDK to build.
+
 ## Build and run
 - `swift test` (the test target passes the Swift Testing macro-plugin path needed with Command Line Tools only).
 - `./scripts/build-app.sh` produces `build/WorkTimer.app` (ad-hoc signed). Copy it to `/Applications`, open it, and allow notifications.

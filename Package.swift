@@ -3,7 +3,7 @@ import PackageDescription
 
 let package = Package(
     name: "WorkTimer",
-    platforms: [.macOS(.v13)],
+    platforms: [.macOS("27.0")],
     products: [.library(name: "WorkTimerCore", targets: ["WorkTimerCore"])],
     targets: [
         .target(name: "WorkTimerCore"),

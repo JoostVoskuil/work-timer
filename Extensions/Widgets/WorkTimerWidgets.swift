@@ -57,12 +57,8 @@ struct WidgetView: View {
 struct WorkTimerWidget: Widget {
     var body: some WidgetConfiguration {
         StaticConfiguration(kind: "WorkTimerSummary", provider: Provider()) { entry in
-            if #available(macOS 14.0, *) {
-                WidgetView(entry: entry)
-                    .containerBackground(for: .widget) { Color(nsColor: .windowBackgroundColor) }
-            } else {
-                WidgetView(entry: entry).padding()
-            }
+            WidgetView(entry: entry)
+                .containerBackground(for: .widget) { Color(nsColor: .windowBackgroundColor) }
         }
             .configurationDisplayName("Work hours")
             .description("Today, week and balance.")
