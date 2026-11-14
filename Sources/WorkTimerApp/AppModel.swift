@@ -205,7 +205,7 @@ final class AppModel: ObservableObject {
             widgetPublishError = nil
             if lastWidgetReload == nil || now - (lastWidgetReload ?? now) >= 15 * Duration.minute {
                 widgetLogger.notice("Shared widget snapshot published; requesting timeline reload")
-                WidgetCenter.shared.reloadTimelines(ofKind: "WorkTimerSummary")
+                WidgetCenter.shared.reloadAllTimelines()
                 lastWidgetReload = now
             }
         } catch {

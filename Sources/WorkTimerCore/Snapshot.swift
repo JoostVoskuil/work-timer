@@ -1,5 +1,28 @@
 import Foundation
 
+/// Only aggregate durations leave the app; widget graphs contain no app names or browsing history.
+public struct WidgetGraphBucket: Codable, Equatable {
+    public var start: Millis
+    public var end: Millis
+    public var work: Millis
+    public var personal: Millis
+    public var learn: Millis
+
+    public init(start: Millis, end: Millis, work: Millis, personal: Millis, learn: Millis) {
+        self.start = start; self.end = end
+        self.work = work; self.personal = personal; self.learn = learn
+    }
+}
+
+public struct WidgetGraphs: Codable, Equatable {
+    public var hours: [WidgetGraphBucket]
+    public var days: [WidgetGraphBucket]
+
+    public init(hours: [WidgetGraphBucket], days: [WidgetGraphBucket]) {
+        self.hours = hours; self.days = days
+    }
+}
+
 public struct HealthStatus: Codable, Equatable {
     public var storageOK = true
     public var safariOK: Bool? = nil
@@ -31,6 +54,8 @@ public struct WidgetSnapshot: Codable, Equatable {
     public var status: String
     public var todayLearn: Millis? = nil
     public var weekLearn: Millis? = nil
+    /// Optional so widgets can still decode snapshots published before graphs were added.
+    public var graphs: WidgetGraphs? = nil
 }
 
 public enum SnapshotLoad: Equatable {
@@ -91,6 +116,34 @@ public enum SnapshotBuilder {
                               todayCeiling: Millis(v.dailyCeilingMinutes) * Duration.minute, weekWork: week.work, weekFullTarget: week.fullWeekTarget,
                               weekToDateTarget: week.toDateTarget, weekCeiling: week.weeklyCeiling, balanceToDate: week.toDateBalance,
                               balanceLabel: label, currentDayIncomplete: week.currentDayIncomplete, pending: week.pending, health: health, status: status,
-                              todayLearn: day.learn, weekLearn: week.learn)
+                              todayLearn: day.learn, weekLearn: week.learn,
+                              graphs: WidgetGraphs(hours: hourlyBuckets(calc: calc, day: today),
+                                                   days: week.days.map { d in
+                                  let span = calc.schedule.daySpan(d.date)
+                                  return WidgetGraphBucket(start: span.start, end: span.end, work: d.work, personal: d.personal, learn: d.learn)
+                              }))
+    }
+
+    private static func hourlyBuckets(calc: ReportCalculator, day: LocalDate) -> [WidgetGraphBucket] {
+        let span = calc.schedule.daySpan(day)
+        let segments = calc.segments(in: span)
+        var start = span.start
+        var buckets: [WidgetGraphBucket] = []
+        while start < span.end {
+            // Calendar boundaries preserve short/long days and repeated hours in the reporting timezone.
+            let hour = calc.schedule.calendar.dateInterval(of: .hour, for: Date(millis: start))!
+            let end = min(span.end, hour.end.millis)
+            let range = Span(start, end)
+            var bucket = WidgetGraphBucket(start: start, end: end, work: 0, personal: 0, learn: 0)
+            for segment in segments {
+                guard let cut = segment.span.intersection(range) else { continue }
+                if segment.category == .work { bucket.work += cut.length }
+                if segment.isConfirmedPersonal { bucket.personal += cut.length }
+                if segment.category == .learn { bucket.learn += cut.length }
+            }
+            buckets.append(bucket)
+            start = end
+        }
+        return buckets
     }
 }

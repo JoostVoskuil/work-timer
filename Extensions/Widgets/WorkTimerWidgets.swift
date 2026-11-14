@@ -5,6 +5,7 @@ import WorkTimerCore
 struct Entry: TimelineEntry {
     let date: Date
     let load: SnapshotLoad
+    var isPreview = false
 }
 
 struct Provider: TimelineProvider {
@@ -15,8 +16,10 @@ struct Provider: TimelineProvider {
             return nil
         }
     }
-    func placeholder(in context: Context) -> Entry { Entry(date: Date(), load: .unavailable) }
-    func getSnapshot(in context: Context, completion: @escaping (Entry) -> Void) { completion(Entry(date: Date(), load: Self.store()?.load() ?? .unavailable)) }
+    func placeholder(in context: Context) -> Entry { Entry(date: Date(), load: .unavailable, isPreview: true) }
+    func getSnapshot(in context: Context, completion: @escaping (Entry) -> Void) {
+        completion(Entry(date: Date(), load: Self.store()?.load() ?? .unavailable, isPreview: context.isPreview))
+    }
     func getTimeline(in context: Context, completion: @escaping (WidgetKit.Timeline<Entry>) -> Void) {
         // The app calls WidgetCenter.reloadAllTimelines() on changes; this is only a fallback refresh.
         let e = Entry(date: Date(), load: Self.store()?.load() ?? .unavailable)
@@ -71,4 +74,10 @@ struct WorkTimerWidget: Widget {
     }
 }
 
-@main struct WorkTimerWidgetBundle: WidgetBundle { var body: some Widget { WorkTimerWidget() } }
+@main struct WorkTimerWidgetBundle: WidgetBundle {
+    var body: some Widget {
+        DailyGraphWidget()
+        WeeklyGraphWidget()
+        WorkTimerWidget()
+    }
+}

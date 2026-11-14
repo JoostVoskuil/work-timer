@@ -17,6 +17,7 @@ public struct Segment: Equatable {
     public var note: String
     /// True while the slice still awaits the user's answer.
     public var pending: Bool
+    public var isConfirmedPersonal: Bool { category == .privateTime && reason != .outsideHours }
 
     public var explanation: String {
         switch source {
@@ -169,7 +170,7 @@ public struct ReportCalculator {
             by[s.category, default: 0] += s.span.length
             if s.pending && s.category != .work { pending += s.span.length }
         }
-        let personal = segs.filter { $0.category == .privateTime && $0.reason != .outsideHours }.reduce(Millis(0)) { $0 + $1.span.length }
+        let personal = segs.filter(\.isConfirmedPersonal).reduce(Millis(0)) { $0 + $1.span.length }
         return DaySummary(date: d, byCategory: by, pending: pending, targetMillis: schedule.targetMillis(d), isToday: schedule.localDate(now) == d, personal: personal)
     }
 

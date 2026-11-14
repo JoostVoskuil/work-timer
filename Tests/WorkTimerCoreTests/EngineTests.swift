@@ -304,6 +304,75 @@ private final class Rig {
     }
 }
 
+@Suite struct WidgetGraphTests {
+    @Test func graphBucketsMatchCorrectedLiveReportsAndExcludeUnansweredPrivateTime() throws {
+        let r = try Rig()
+        _ = try r.ledger.append(ActivityInterval(span: Span(at(2025, 6, 8, 9), at(2025, 6, 8, 11)), category: .work, reason: .workWindow))
+        _ = try r.ledger.append(ActivityInterval(span: Span(at(2025, 6, 9, 9), at(2025, 6, 9, 10)), category: .learn, reason: .learning))
+        _ = try r.ledger.append(ActivityInterval(span: Span(at(2025, 6, 13, 7), at(2025, 6, 13, 8)), category: .privateTime, reason: .outsideHours))
+        _ = try r.ledger.append(ActivityInterval(span: Span(at(2025, 6, 13, 8, 45), at(2025, 6, 13, 10, 15)), category: .work, reason: .workWindow))
+        _ = try r.ledger.addAdjustment(Adjustment(span: Span(at(2025, 6, 13, 9, 15), at(2025, 6, 13, 9, 45)), category: .learn, createdAt: at(2025, 6, 13, 12)))
+        _ = try r.ledger.append(ActivityInterval(span: Span(at(2025, 6, 13, 10, 15), at(2025, 6, 13, 11)), category: .privateTime, reason: .correction))
+        _ = try r.ledger.append(ActivityInterval(span: Span(at(2025, 6, 13, 11), at(2025, 6, 13, 12)), category: .away, reason: .locked))
+        let now = at(2025, 6, 13, 12, 30)
+        let calc = ReportCalculator(ledger: r.ledger, live: {
+            ActivityInterval(span: Span(at(2025, 6, 13, 12), now), category: .work, reason: .workWindow, source: "live")
+        })
+        let snapshot = SnapshotBuilder.build(calc: calc, now: now, health: HealthStatus(), status: "Work")
+        let graph = try #require(snapshot.graphs)
+        #expect(graph.hours.count == 24)
+        #expect(graph.hours[7].personal == 0)
+        #expect(graph.hours[8].work == 15 * Duration.minute)
+        #expect(graph.hours[9].work == 30 * Duration.minute)
+        #expect(graph.hours[9].learn == 30 * Duration.minute)
+        #expect(graph.hours[10].work == 15 * Duration.minute)
+        #expect(graph.hours[10].personal == 45 * Duration.minute)
+        #expect(graph.hours[11].work + graph.hours[11].personal + graph.hours[11].learn == 0)
+        #expect(graph.hours[12].work == 30 * Duration.minute)
+        #expect(graph.hours.reduce(0) { $0 + $1.work } == snapshot.todayWork)
+        #expect(graph.hours.reduce(0) { $0 + $1.personal } == calc.day(LocalDate(2025, 6, 13), now: now).personal)
+        #expect(graph.hours.reduce(0) { $0 + $1.learn } == snapshot.todayLearn)
+        #expect(graph.days.count == 7)
+        #expect(graph.days.first?.start == at(2025, 6, 9, 0))
+        #expect(graph.days.last?.end == at(2025, 6, 16, 0))
+        #expect(graph.days.reduce(0) { $0 + $1.work } == 90 * Duration.minute)
+        #expect(graph.days.reduce(0) { $0 + $1.personal } == 45 * Duration.minute)
+        #expect(graph.days.reduce(0) { $0 + $1.learn } == 90 * Duration.minute)
+        #expect(graph.days[4].work == snapshot.todayWork)
+        #expect(graph.days[5].work + graph.days[6].work == 0)
+    }
+
+    @Test func hourlyGraphsRespectMidnightAndBothDaylightSavingTransitions() throws {
+        for (day, expectedHours) in [(LocalDate(2025, 3, 30), 23), (LocalDate(2025, 10, 26), 25)] {
+            let r = try Rig()
+            let span = r.ledger.schedule().daySpan(day)
+            _ = try r.ledger.append(ActivityInterval(span: Span(span.start - Duration.hour, span.end + Duration.hour), category: .work, reason: .workWindow))
+            let snapshot = SnapshotBuilder.build(calc: r.calc(now: span.end - 1), now: span.end - 1, health: HealthStatus(), status: "Work")
+            let hours = try #require(snapshot.graphs?.hours)
+            #expect(hours.count == expectedHours)
+            #expect(hours.first?.start == span.start)
+            #expect(hours.last?.end == span.end)
+            #expect(hours.allSatisfy { $0.work == Duration.hour })
+            #expect(hours.reduce(0) { $0 + $1.work } == snapshot.todayWork)
+            for (left, right) in zip(hours, hours.dropFirst()) { #expect(left.end == right.start) }
+        }
+    }
+
+    @Test func legacySnapshotStillLoadsWithoutInventingGraphData() throws {
+        let r = try Rig()
+        let now = at(2025, 6, 13, 12)
+        let snapshot = SnapshotBuilder.build(calc: r.calc(now: now), now: now, health: HealthStatus(), status: "Work")
+        var json = try #require(JSONSerialization.jsonObject(with: JSONEncoder().encode(snapshot)) as? [String: Any])
+        json.removeValue(forKey: "graphs")
+        let data = try JSONSerialization.data(withJSONObject: json)
+        let legacy = try JSONDecoder().decode(WidgetSnapshot.self, from: data)
+        #expect(legacy.graphs == nil)
+        #expect(legacy.todayWork == snapshot.todayWork)
+        try data.write(to: SnapshotStore(directory: r.dir).url)
+        #expect(SnapshotStore(directory: r.dir).load() == .ok(legacy))
+    }
+}
+
 @Suite struct AccountingTests {
     @Test func combinedWeeklyLimitIncludesLearnAndAlertsOnceAtExactly45Hours() throws {
         let r = try Rig()

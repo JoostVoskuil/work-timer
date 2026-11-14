@@ -42,5 +42,10 @@ On restart, unfinished after-hours reviews from previous sessions are closed at 
 `Extensions/` holds the Safari Web Extension (hostname only), its native handler, the WidgetKit widget and an XcodeGen `project.yml`. The SwiftPM-built app does not contain these extensions; use the XcodeGen watcher above for the full app. Widgets require the extension to be installed and added in Notification Center.
 Both extensions enable App Sandbox, which macOS requires for PlugInKit discovery. The installer verifies that the installed widget appears in PlugInKit, rather than treating a successful registration command as proof of discovery. For desktop placement, right-click the desktop, choose **Edit Widgets**, and search for **WorkTimer**.
 
+### Graph widgets
+Choose **Daily graph** or **Weekly graph**, each available in medium and large sizes. The daily chart stacks activity by hour; the weekly chart stacks Monday through Sunday. Work is teal, Private is purple, and Learn is blue, with separate hour/minute totals beneath each chart. The existing **Work hours** summary remains available.
+
+Graphs use the reporting timezone, including daylight-saving changes, and the same corrected/live accounting as Reports. Unanswered after-hours activity is excluded from Private; idle, away, breaks and gaps are not shown as classified activity. Empty charts say so rather than inventing activity, and snapshots older than 30 minutes show an outdated-data indicator. Gallery previews use example data only; placed widgets always use your published snapshot. All widget types receive refresh requests together, subject to macOS refresh scheduling.
+
 ## Not measured
 CPU, memory and energy targets, 8-hour soak, DST on a real clock, real sleep/lock, Safari behaviour and widget refresh budgets need manual validation (plan section 10, milestones A and H).
