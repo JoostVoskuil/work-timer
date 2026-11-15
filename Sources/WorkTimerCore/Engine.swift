@@ -182,6 +182,10 @@ public final class TrackingEngine {
                 app = a
                 if idle >= config.idleThresholdSeconds { userIdle = true; idleStart = eff }
             case .appActivated(let a):
+                if Self.isLoginWindow(a) && !Self.isLoginWindow(app) {
+                    try endPrompt(at: eff)
+                    try endIdle(at: eff)
+                }
                 app = a
             case .browser(let o):
                 accepted = accept(o, at: eff)
@@ -279,7 +283,11 @@ public final class TrackingEngine {
 
     // MARK: Idle
 
-    private var tracking: Bool { !(asleep || locked || inactive || paused) }
+    private static func isLoginWindow(_ app: String?) -> Bool {
+        app?.caseInsensitiveCompare("com.apple.loginwindow") == .orderedSame
+    }
+
+    private var tracking: Bool { !(asleep || locked || inactive || paused || Self.isLoginWindow(app)) }
 
     private func applyIdle(seconds: Double, at eff: inout Millis) throws {
         guard started, tracking else { return }
@@ -350,6 +358,7 @@ public final class TrackingEngine {
         if locked { return ex(.away, .locked) }
         if inactive { return ex(.away, .sessionInactive) }
         if paused { return ex(.away, .paused) }
+        if Self.isLoginWindow(app) { return ex(.away, .locked) }
         if breakActive { return ex(.breakTime, .pomodoroBreak, app: userIdle ? nil : app) }
         if userIdle { return schedule.inWorkWindow(t) ? ex(.away, .idleTimeout) : nil }
         guard let appID = app else { return ex(.gap, .suspension) }

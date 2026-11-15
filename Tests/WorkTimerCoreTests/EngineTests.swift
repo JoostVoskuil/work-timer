@@ -157,6 +157,43 @@ private final class Rig {
         }
     }
 
+    @Test func loginWindowIsAwayDespiteManualModeRulesAndBreakThenResumes() throws {
+        let r = try Rig()
+        let start = at(2025, 6, 13, 10)
+        try r.ledger.upsertRule(ClassificationRule(kind: .app, pattern: "com.apple.loginwindow", category: .work))
+        r.engine.reloadConfiguration()
+        try r.send(.launch(app: "editor", idleSeconds: 0), start)
+        try r.send(.answerOutside(.learn), start)
+        try r.send(.pomodoroBreak(true), start)
+        try r.send(.appActivated("com.apple.loginwindow"), start + 5 * Duration.minute)
+        #expect(r.engine.liveStatus()?.category == .away)
+        #expect(r.engine.liveStatus()?.reason == .locked)
+        try r.send(.idleSample(seconds: 600), start + 10 * Duration.minute)
+        try r.send(.appActivated("editor"), start + 15 * Duration.minute)
+        #expect(r.engine.liveStatus()?.category == .breakTime)
+        try r.send(.pomodoroBreak(false), start + 15 * Duration.minute)
+        #expect(r.engine.liveStatus()?.category == .learn)
+        try r.send(.shutdown, start + 20 * Duration.minute)
+        let blocks = try r.ledger.blocks(in: Span(start, start + 20 * Duration.minute))
+        #expect(blocks.map { $0[.away] } == [0, ActivityBlock.length, ActivityBlock.length, 0])
+        #expect(blocks[1].apps.isEmpty && blocks[2].apps.isEmpty)
+        #expect(r.ledger.reviews(status: .pending).isEmpty)
+    }
+
+    @Test func loginWindowAtLaunchIsClippedToWorkingHours() throws {
+        let r = try Rig()
+        let start = at(2025, 6, 13, 6, 55)
+        let end = at(2025, 6, 13, 7, 10)
+        try r.send(.launch(app: "com.apple.loginwindow", idleSeconds: 0), start)
+        #expect(r.engine.liveStatus() == nil)
+        try r.send(.tick, end)
+        try r.send(.shutdown, end)
+        let blocks = try r.ledger.blocks(in: Span(start, end))
+        #expect(blocks.count == 2)
+        #expect(blocks.allSatisfy { $0[.away] == ActivityBlock.length && $0.apps.isEmpty })
+        #expect(r.ledger.reviews(status: .pending).isEmpty)
+    }
+
     @Test func sleepAndLockAreClippedToWorkWindow() throws {
         for unavailable in [EngineEvent.sleep, .lock] {
             let r = try Rig()

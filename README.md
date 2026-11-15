@@ -39,7 +39,7 @@ Clicking the menu-bar icon opens a Today dashboard and refreshes it immediately,
 - The same rule applies to existing history, Today, reports, graphs, widgets, limits and CSV, after correction overlays. No destructive conversion is needed; original counters and backups are preserved.
 - Work = classified work time; Private, Break, Away and Unknown are excluded. Outside-hours time is confirmed Private by default, not pending.
 - Five minutes without input reclassifies the period since the last input as Away, clipped to configured working hours. It does not create a review task. Correct completed blocks in Today if you were working on a call.
-- All inactivity (idle, sleep, screen lock, inactive session and paused tracking) is recorded as Away only within the configured work window. Outside that window it is omitted, not relabelled as Private.
+- All inactivity (idle, sleep, screen lock, login window, inactive session and paused tracking) is recorded as Away only within the configured work window. Outside that window it is omitted, not relabelled as Private. When `com.apple.loginwindow` is the foreground app, it takes precedence over manual modes, classification rules and Pomodoro breaks.
 - Away corrections are limited to recorded coverage within working hours. Historical database cleanup preserves mixed or corrected blocks when removing inactivity would risk other activity or Undo history; its backup is listed in Settings → Health.
 - Week-to-date balance = work Monday..selected day minus scheduled targets for those days (today's full target counts and is labelled "incomplete").
 - One calculator (`ReportCalculator`) feeds the menu bar, reports, widget snapshot and CSV.
