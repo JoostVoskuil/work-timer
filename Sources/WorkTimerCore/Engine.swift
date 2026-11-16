@@ -77,6 +77,8 @@ private struct CheckpointState: Codable {
 /// Serialized, event-driven tracker producing non-overlapping half-open intervals. Classification follows the
 /// plan's precedence: unavailable > break > idle > rules > session answer > work window > outside hours.
 public final class TrackingEngine {
+    private static let shortIdleLimit = 15 * Duration.minute
+
     private struct Open {
         var start: Millis
         var category: Category
@@ -312,7 +314,27 @@ public final class TrackingEngine {
         } else if userIdle && seconds < config.idleThresholdSeconds {
             let end = max(eff - Millis(seconds * 1000), idleStart)
             try endIdle(at: end)
+            try finishIdle(at: end)
             try reclassify(at: end)
+        }
+    }
+
+    private func finishIdle(at end: Millis) throws {
+        let spans = schedule.workingSpans(in: Span(idleStart, end))
+        guard !spans.isEmpty else { return }
+        let duration = spans.reduce(0) { $0 + $1.length }
+        let isShortBreak = duration <= Self.shortIdleLimit
+        try ledger.db.transaction {
+            for span in spans {
+                let id = try ledger.addReview(ReviewItem(type: .idle, start: span.start, end: span.end,
+                                                         createdAt: end, dedupeKey: "idle:\(span.start)"))
+                if isShortBreak {
+                    try ledger.addAdjustment(Adjustment(span: span, category: .work,
+                                                        note: "Short break counted as work", createdAt: end,
+                                                        reviewID: id))
+                    try ledger.resolveReview(id: id, resolution: "short-break-work", at: end)
+                }
+            }
         }
     }
 

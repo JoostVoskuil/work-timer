@@ -56,7 +56,7 @@ public struct ActivityBlock: Codable, Equatable, Identifiable {
         return result
     }
 
-    public mutating func apply(_ adjustment: Adjustment, unknownAmount: Millis? = nil) throws {
+    public mutating func apply(_ adjustment: Adjustment, reviewSource: Category? = nil, reviewAmount: Millis? = nil) throws {
         guard span.overlaps(adjustment.span) else { return }
         if adjustment.kind == .manual {
             guard let cut = span.intersection(adjustment.span) else { return }
@@ -71,10 +71,10 @@ public struct ActivityBlock: Codable, Equatable, Identifiable {
             amounts[adjustment.category, default: 0] += cut.length - existing
             coverage = Self.union(coverage + [cut])
         } else if adjustment.reviewID != nil {
-            // Review answers affect unknown time only, never known activity in a mixed block.
-            let unknown = min(self[.gap], unknownAmount ?? self[.gap])
-            amounts[.gap, default: 0] -= unknown
-            amounts[adjustment.category, default: 0] += unknown
+            let source = reviewSource ?? .gap
+            let reviewed = min(self[source], reviewAmount ?? self[source])
+            amounts[source, default: 0] -= reviewed
+            amounts[adjustment.category, default: 0] += reviewed
         } else {
             let total = observed
             amounts = [adjustment.category: total]

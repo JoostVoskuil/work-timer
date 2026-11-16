@@ -3,6 +3,7 @@
 set -euo pipefail
 cd "$(dirname "$0")/.."
 VERSION="${VERSION:-0.1.0}"
+BUILD_DATE="$(date -u '+%Y-%m-%d %H:%M:%S UTC')"
 swift build -c release
 BIN="$(swift build -c release --show-bin-path)/WorkTimerApp"
 APP="build/WorkTimer.app"
@@ -21,6 +22,7 @@ cat > "$APP/Contents/Info.plist" <<PLIST
   <key>CFBundlePackageType</key><string>APPL</string>
   <key>CFBundleShortVersionString</key><string>${VERSION}</string>
   <key>CFBundleVersion</key><string>${VERSION}</string>
+  <key>WorkTimerBuildDate</key><string>${BUILD_DATE}</string>
   <key>LSMinimumSystemVersion</key><string>27.0</string>
   <key>LSUIElement</key><true/>
   <key>NSHighResolutionCapable</key><true/>

@@ -243,15 +243,50 @@ private final class Rig {
         #expect(r.total(.work, fri, now: now) == 0)
     }
 
-    @Test func idleDefaultsToAwayWithoutReviewOrAppContext() throws {
+    @Test func longIdleRemainsAwayAndCreatesReviewOnlyAfterReturn() throws {
         let r = try Rig()
         let start = at(2025, 6, 13, 10)
         try r.send(.launch(app: "com.apple.Xcode", idleSeconds: 0), start)
         try r.send(.idleSample(seconds: 600), start + 10 * Duration.minute)
-        try r.send(.idleSample(seconds: 0), start + 20 * Duration.minute)
         #expect(r.ledger.reviews(status: .pending).isEmpty)
+        try r.send(.idleSample(seconds: 0), start + 20 * Duration.minute)
+        let review = try #require(r.ledger.reviews(status: .pending).first)
+        #expect(review.type == .idle)
+        #expect(review.start == start)
+        #expect(review.end == start + 20 * Duration.minute)
         #expect(r.total(.away, fri, now: start + 20 * Duration.minute) == 20 * Duration.minute)
         #expect(r.ledger.readCheckpoint()?.stateJSON.contains("com.apple.Xcode") == false)
+    }
+
+    @Test func idleOfExactlyFifteenMinutesCountsAsWorkOnReturn() throws {
+        let r = try Rig()
+        let start = at(2025, 6, 13, 10)
+        try r.send(.launch(app: "editor", idleSeconds: 0), start)
+        try r.send(.idleSample(seconds: 600), start + 10 * Duration.minute)
+        try r.send(.idleSample(seconds: 0), start + 15 * Duration.minute)
+        #expect(r.ledger.reviews(status: .pending).isEmpty)
+        #expect(r.total(.work, fri, now: start + 15 * Duration.minute) == 15 * Duration.minute)
+        #expect(r.total(.away, fri, now: start + 15 * Duration.minute) == 0)
+        try r.send(.shutdown, start + 15 * Duration.minute)
+        #expect(try r.ledger.blocks(in: Span(start, start + 15 * Duration.minute))
+                    .reduce(0) { $0 + $1[.away] } == 15 * Duration.minute)
+    }
+
+    @Test func longIdleCanBeAnsweredAsWorkAndUndoRestoresPendingReview() throws {
+        let r = try Rig()
+        let start = at(2025, 6, 13, 10)
+        let end = start + 15 * Duration.minute + 1
+        try r.send(.launch(app: "editor", idleSeconds: 0), start)
+        try r.send(.idleSample(seconds: 600), start + 10 * Duration.minute)
+        try r.send(.idleSample(seconds: 0), end)
+        let review = try #require(r.ledger.reviews(status: .pending).first)
+        try ReviewResolver(ledger: r.ledger).resolve(review, as: .work, now: end)
+        #expect(r.total(.work, fri, now: end) == 20 * Duration.minute)
+        #expect(r.total(.away, fri, now: end) == 0)
+        let adjustment = try #require(r.ledger.adjustments(in: Span(start, end)).first)
+        try ReviewResolver(ledger: r.ledger).undo(adjustmentID: adjustment.id!, now: end)
+        #expect(r.ledger.reviews(status: .pending).count == 1)
+        #expect(r.total(.away, fri, now: end) == 20 * Duration.minute)
     }
 
     @Test func idleReturnKeepsIdlePeriodAndResumesWork() throws {

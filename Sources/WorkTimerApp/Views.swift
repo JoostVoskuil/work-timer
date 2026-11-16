@@ -41,6 +41,10 @@ private enum WorkStyle {
     static let accent = Color.teal
 }
 
+private var buildDateText: String {
+    Bundle.main.object(forInfoDictionaryKey: "WorkTimerBuildDate") as? String ?? "Unknown"
+}
+
 private struct SectionHeading: View {
     let title: String
     let subtitle: String
@@ -417,13 +421,12 @@ private struct MenuTodayDashboard: View {
 // MARK: Main window
 
 private enum WorkSection: String, CaseIterable, Identifiable {
-    case today = "Today", reports = "Reports", review = "Review", pomodoro = "Pomodoro", settings = "Settings"
+    case today = "Today", reports = "Reports", pomodoro = "Pomodoro", settings = "Settings"
     var id: Self { self }
     var symbol: String {
         switch self {
         case .today: return "clock.badge.checkmark"
         case .reports: return "chart.bar.xaxis"
-        case .review: return "tray"
         case .pomodoro: return "timer"
         case .settings: return "slider.horizontal.3"
         }
@@ -438,23 +441,22 @@ struct MainView: View {
         NavigationSplitView {
             List(selection: $selection) {
                 ForEach(WorkSection.allCases) { section in
-                    if section == .review && !model.reviews.isEmpty {
-                        Label(section.rawValue, systemImage: section.symbol)
-                            .badge(model.reviews.count).tag(section)
-                    } else {
-                        Label(section.rawValue, systemImage: section.symbol).tag(section)
-                    }
+                    Label(section.rawValue, systemImage: section.symbol).tag(section)
                 }
             }
             .listStyle(.sidebar)
             .navigationSplitViewColumnWidth(min: 180, ideal: 200, max: 240)
             .navigationTitle("WorkTimer")
+            Text("Build \(buildDateText)")
+                .font(.caption2)
+                .foregroundStyle(.secondary)
+                .padding(.horizontal, 12)
+                .padding(.bottom, 8)
         } detail: {
             Group {
                 switch selection ?? .today {
                 case .today: TodayView(model: model)
                 case .reports: ScrollView { ReportsView(model: model) }
-                case .review: ReviewView(model: model)
                 case .pomodoro: PomodoroView(model: model)
                 case .settings: SettingsView(model: model)
                 }
@@ -524,12 +526,64 @@ private struct DaysOffPanel: View {
     }
 }
 
+private enum ActivityFilter: String, CaseIterable {
+    case all, away, unknown
+
+    var title: String {
+        switch self {
+        case .all: return "All"
+        case .away: return "Away"
+        case .unknown: return "Unknown"
+        }
+    }
+}
+
+private struct ActivityFilterPicker: View {
+    @Binding var selection: ActivityFilter
+
+    var body: some View {
+        HStack(spacing: 0) {
+            ForEach(ActivityFilter.allCases, id: \.self) { filter in
+                Button {
+                    selection = filter
+                } label: {
+                    Text(filter.title)
+                        .frame(maxWidth: .infinity, minHeight: 24)
+                        .foregroundStyle(selection == filter ? WorkStyle.accent : .secondary)
+                }
+                .buttonStyle(.borderless)
+                .contentShape(Rectangle())
+                .background {
+                    if selection == filter {
+                        RoundedRectangle(cornerRadius: 5)
+                            .fill(WorkStyle.accent.opacity(0.18))
+                    }
+                }
+                .accessibilityAddTraits(selection == filter ? .isSelected : [])
+            }
+        }
+        .padding(2)
+        .frame(width: 240, height: 30)
+        .background(.quaternary.opacity(0.35), in: RoundedRectangle(cornerRadius: 7))
+        .overlay {
+            RoundedRectangle(cornerRadius: 7)
+                .stroke(.quaternary, lineWidth: 1)
+        }
+        .transaction { transaction in
+            transaction.animation = nil
+        }
+        .accessibilityElement(children: .contain)
+        .accessibilityLabel("Activity filter")
+    }
+}
+
 struct TodayView: View {
     @ObservedObject var model: AppModel
     @Local private var showManual = false
     @Local private var selectedBlocks: Set<Millis> = []
     @Local private var selectionAnchor: Millis? = nil
     @Local private var showDaysOff = false
+    @Local private var activityFilter: ActivityFilter = .all
     var body: some View {
         let schedule = model.calculator?.schedule
         let day = model.activityDay
@@ -598,6 +652,7 @@ struct TodayView: View {
             HStack {
                 Text("Activity · five-minute blocks").font(.headline)
                 Spacer()
+                ActivityFilterPicker(selection: $activityFilter)
                 Button { showManual = true } label: { Label("Add manual entry", systemImage: "plus") }
             }
             HStack {
@@ -619,7 +674,7 @@ struct TodayView: View {
             Text("Check blocks to select them. Shift-click a checkbox to check or clear a range, including blocks in collapsed Away groups. Only completed blocks can be changed.")
                 .font(.caption).foregroundStyle(.secondary)
             List {
-                ForEach(ActivityBlockGroup.groupingAway(model.activityBlocks, completedThrough: ActivityBlock.floor(model.now)).reversed()) { group in
+                ForEach(ActivityBlockGroup.groupingAway(displayedBlocks, completedThrough: ActivityBlock.floor(model.now)).reversed()) { group in
                     if group.blocks.count > 1 {
                         DisclosureGroup {
                             ForEach(group.blocks.reversed()) { activityBlockRow($0, schedule: schedule) }
@@ -645,27 +700,47 @@ struct TodayView: View {
             }
             .listStyle(.inset)
             .scrollContentBackground(.hidden)
+            .frame(maxWidth: .infinity, minHeight: 300, maxHeight: .infinity)
+            .transaction { transaction in
+                transaction.animation = nil
+            }
             .overlay {
-                if model.activityBlocks.isEmpty {
+                if displayedBlocks.isEmpty {
                     VStack(spacing: 8) {
                         Image(systemName: "clock.arrow.circlepath").font(.title).foregroundStyle(.secondary)
-                        Text(day.isToday ? "No activity yet" : "No activity recorded").font(.headline)
-                        Text(day.isToday ? "Tracked activity will appear here." : "Choose another day or add a manual entry.")
+                        Text(activityFilter == .all
+                             ? (day.isToday ? "No activity yet" : "No activity recorded")
+                             : "No \(activityFilter.title.lowercased()) blocks")
+                            .font(.headline)
+                        Text(activityFilter == .all
+                             ? (day.isToday ? "Tracked activity will appear here." : "Choose another day or add a manual entry.")
+                             : "Choose another filter or change the activity day.")
                             .font(.caption).foregroundStyle(.secondary)
                     }.allowsHitTesting(false)
                 }
             }
         }
         .onChange(of: day.date) { clearBlockSelection() }
+        .onChange(of: activityFilter) { clearBlockSelection() }
         .onChange(of: model.activityBlocks.map(\.id)) {
             selectedBlocks.formIntersection(completedBlockIDs)
             if let anchor = selectionAnchor, !completedBlockIDs.contains(anchor) { selectionAnchor = nil }
         }
         .sheet(isPresented: $showManual) { ManualEntryView(model: model, isPresented: $showManual) }
+        .frame(maxHeight: .infinity, alignment: .topLeading)
+        .animation(nil, value: activityFilter)
+    }
+
+    private var displayedBlocks: [ActivityBlock] {
+        switch activityFilter {
+        case .all: return model.activityBlocks
+        case .away: return model.activityBlocks.filter { $0[.away] > 0 }
+        case .unknown: return model.activityBlocks.filter { $0[.gap] > 0 }
+        }
     }
 
     private var completedBlockIDs: Set<Millis> {
-        Set(model.activityBlocks.filter { $0.span.end <= ActivityBlock.floor(model.now) }.map(\.id))
+        Set(displayedBlocks.filter { $0.span.end <= ActivityBlock.floor(model.now) }.map(\.id))
     }
 
     private func clearBlockSelection() {
@@ -688,7 +763,7 @@ struct TodayView: View {
 
     private func canAssignAwayToSelection(schedule: Schedule?) -> Bool {
         guard let schedule else { return false }
-        return model.activityBlocks.filter { selectedBlocks.contains($0.id) }.allSatisfy { block in
+        return displayedBlocks.filter { selectedBlocks.contains($0.id) }.allSatisfy { block in
             schedule.workingSpans(in: block.span).reduce(0) { $0 + $1.length } == block.span.length
         }
     }
@@ -903,12 +978,12 @@ struct ReviewView: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 16) {
             SectionHeading(title: "Review", subtitle: "You decide what counts as work", symbol: "tray.full")
-            Text("Only tracking gaps of at least 15 minutes during working hours need your input. Idle time defaults to Away and outside-hours activity defaults to Private.")
+            Text("Tracking gaps of at least 15 minutes and idle periods longer than 15 minutes during working hours need your input. Short idle periods count as Work; outside-hours activity defaults to Private.")
                 .foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
             DisclosureGroup("What needs reviewing?") {
                 VStack(alignment: .leading, spacing: 8) {
                     Text("Tracking gap: the app was closed, interrupted, or could not observe activity.")
-                    Text("Short gaps, idle time, and ordinary outside-hours activity do not create review tasks.")
+                    Text("After you resume, longer idle periods let you choose Away or Work. Short gaps and ordinary outside-hours activity do not create review tasks.")
                     Text("For calls or other misclassified activity, correct completed five-minute blocks in Today.")
                     Text("Work counts toward your work target. Learn is separate, but shares the 45-hour weekly limit. Break and Private count toward neither. Leave an item unanswered if you are unsure.")
                 }.font(.callout).foregroundStyle(.secondary).padding(.top, 8)
@@ -929,21 +1004,27 @@ struct ReviewView: View {
                         HStack(alignment: .firstTextBaseline) {
                             Label(title(r), systemImage: symbol(r)).font(.headline)
                             Spacer()
-                            Text(r.end.map { "\(hm(max(0, $0 - r.start))) h" } ?? "Ongoing")
+                            Text(r.end.map { hm(max(0, $0 - r.start)) } ?? "Ongoing")
                                 .font(.callout).monospacedDigit().foregroundStyle(.secondary)
                         }
                         Text(period(r)).font(.caption).foregroundStyle(.secondary)
                         Text(explanation(r)).font(.callout).fixedSize(horizontal: false, vertical: true)
                         HStack {
-                            Button("Work") { model.resolve(r, as: .work) }
-                                .disabled(r.end == nil && !model.canAnswerLiveReview(r))
-                            Button("Learn") { model.resolve(r, as: .learn) }
-                                .disabled(r.end == nil && !model.canAnswerLiveReview(r))
-                            Button("Break") { model.resolve(r, as: .breakTime) }.disabled(r.end == nil)
-                            Button("Private") { model.resolve(r, as: .privateTime) }
-                                .disabled(r.end == nil && !model.canAnswerLiveReview(r))
+                            if r.type == .idle {
+                                Button("Work") { model.resolve(r, as: .work) }
+                                Button("Away") { model.resolve(r, as: .away) }
+                            } else {
+                                Button("Work") { model.resolve(r, as: .work) }
+                                    .disabled(r.end == nil && !model.canAnswerLiveReview(r))
+                                Button("Learn") { model.resolve(r, as: .learn) }
+                                    .disabled(r.end == nil && !model.canAnswerLiveReview(r))
+                                Button("Break") { model.resolve(r, as: .breakTime) }.disabled(r.end == nil)
+                                Button("Private") { model.resolve(r, as: .privateTime) }
+                                    .disabled(r.end == nil && !model.canAnswerLiveReview(r))
+                            }
                             Spacer()
-                            Text("Not counted as work").font(.caption).foregroundStyle(.secondary)
+                            Text(r.type == .idle ? "Currently Away" : "Not counted as work")
+                                .font(.caption).foregroundStyle(.secondary)
                         }
                         if r.end == nil {
                             Text(model.canAnswerLiveReview(r)
@@ -955,12 +1036,45 @@ struct ReviewView: View {
                     .padding(.vertical, 10)
                 }.listStyle(.inset)
             }
+            if !reviewBlocks.isEmpty {
+                Divider()
+                VStack(alignment: .leading, spacing: 8) {
+                    Text("Unknown and Away timeblocks").font(.headline)
+                    Text("Recorded five-minute blocks for the displayed activity day. Use Today to correct a completed block.")
+                        .font(.caption).foregroundStyle(.secondary)
+                    ScrollView {
+                        LazyVStack(alignment: .leading, spacing: 0) {
+                            ForEach(reviewBlocks) { block in
+                                HStack(spacing: 10) {
+                                    Circle().fill(color(blockCategory(block))).frame(width: 7, height: 7)
+                                    Text("\(timeText(block.span.start))–\(timeText(block.span.end))")
+                                        .font(.callout).monospacedDigit()
+                                    Text(blockCategory(block).title)
+                                    Spacer()
+                                    Text(hm(block.observed)).font(.callout).monospacedDigit().foregroundStyle(.secondary)
+                                }
+                                .padding(.vertical, 7)
+                                Divider()
+                            }
+                        }
+                    }
+                    .frame(maxHeight: 220)
+                }
+            }
         }
+    }
+
+    private var reviewBlocks: [ActivityBlock] {
+        model.activityBlocks.filter { $0[.gap] > 0 || $0[.away] > 0 }.reversed()
+    }
+
+    private func blockCategory(_ block: ActivityBlock) -> WorkTimerCore.Category {
+        block[.gap] > 0 ? .gap : .away
     }
 
     private func title(_ review: ReviewItem) -> String {
         switch review.type {
-        case .idle: return "Were you working away from the keyboard?"
+        case .idle: return "Were you away, or were you working?"
         case .gap: return "What happened while tracking was unavailable?"
         case .outsideHours: return "Was this after-hours activity work?"
         }
@@ -976,7 +1090,7 @@ struct ReviewView: View {
 
     private func explanation(_ review: ReviewItem) -> String {
         switch review.type {
-        case .idle: return "No keyboard or mouse input was detected. Count this as work if you were on a call or doing other work."
+        case .idle: return "No keyboard or mouse input was detected for more than 15 minutes. Choose Work to count this period as work, or Away to exclude it."
         case .gap: return "WorkTimer has no reliable activity record for this period. Only count it as work if you know you were working."
         case .outsideHours: return "This activity was outside your configured working hours. Counting it as work keeps existing private-app and private-domain exclusions."
         }

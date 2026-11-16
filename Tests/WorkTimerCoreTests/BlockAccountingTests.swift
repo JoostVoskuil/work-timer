@@ -594,6 +594,34 @@ private func send(_ engine: TrackingEngine, _ event: EngineEvent, _ at: Millis) 
         #expect(ledger.reviews(status: .pending).count == 1)
     }
 
+    @Test func idleReviewCorrectionChangesOnlyAwayTimeAndSupportsUndo() throws {
+        let ledger = try memoryLedger()
+        let start = instant(10)
+        let range = Span(start, start + 15 * Duration.minute)
+        try ledger.record([
+            ActivityInterval(span: Span(start, start + Duration.minute), category: .work, reason: .workWindow),
+            ActivityInterval(span: Span(start + Duration.minute, range.end), category: .away, reason: .idleTimeout)
+        ])
+        let reviewID = try ledger.addReview(ReviewItem(type: .idle, start: range.start + Duration.minute,
+                                                       end: range.end, createdAt: range.end, dedupeKey: "idle-review-test"))
+        let review = ReviewItem(id: reviewID, type: .idle, start: range.start + Duration.minute,
+                                end: range.end, createdAt: range.end, dedupeKey: "idle-review-test")
+        let resolver = ReviewResolver(ledger: ledger)
+        #expect(throws: (any Error).self) { try resolver.resolve(review, as: .learn, now: range.end) }
+        try resolver.resolve(review, as: .work, now: range.end)
+        var blocks = try ledger.effectiveBlocks(in: range)
+        #expect(blocks.reduce(0) { $0 + $1[.work] } == 15 * Duration.minute)
+        #expect(blocks.reduce(0) { $0 + $1[.away] } == 0)
+        let adjustment = try #require(ledger.adjustments(in: range).first)
+        try resolver.undo(adjustmentID: adjustment.id!, now: range.end)
+        blocks = try ledger.effectiveBlocks(in: range)
+        #expect(blocks.reduce(0) { $0 + $1[.work] } == Duration.minute)
+        #expect(blocks.reduce(0) { $0 + $1[.away] } == 14 * Duration.minute)
+        let pending = try #require(ledger.reviews(status: .pending).first)
+        try resolver.resolve(pending, as: .away, now: range.end)
+        #expect(ledger.reviews(status: .pending).isEmpty)
+    }
+
     @Test func partialBlockCorrectionsPreserveCoverageAndOverlappingUndo() throws {
         let ledger = try memoryLedger()
         let start = instant(10)

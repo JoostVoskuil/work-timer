@@ -89,13 +89,15 @@ extension Ledger {
             var start = ActivityBlock.floor(adjustment.span.start)
             while start < adjustment.span.end {
                 var block = result[start] ?? ActivityBlock(start: start)
-                var unknown: Millis?
+                var reviewSource: Category?
+                var reviewAmount: Millis?
                 if let reviewID = adjustment.reviewID,
                    let review = reviewByID[reviewID], let end = review.end,
                    let cut = block.span.intersection(Span(review.start, end)) {
-                    unknown = cut.length
+                    reviewSource = review.type == .idle ? .away : .gap
+                    reviewAmount = cut.length
                 }
-                try block.apply(adjustment, unknownAmount: unknown)
+                try block.apply(adjustment, reviewSource: reviewSource, reviewAmount: reviewAmount)
                 if block.observed > 0 { result[start] = block }
                 start += ActivityBlock.length
             }

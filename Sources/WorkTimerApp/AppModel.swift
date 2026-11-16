@@ -19,8 +19,23 @@ private final class NotificationHandler: NSObject, UNUserNotificationCenterDeleg
         case "AFTER_HOURS_LATER": answer = .later
         default: answer = nil
         }
-        guard let answer else { return }
-        await AppModel.shared.answerOutside(answer)
+        if let answer {
+            await AppModel.shared.answerOutside(answer)
+            return
+        }
+        let reviewID = (response.notification.request.content.userInfo["reviewID"] as? String).flatMap(Int64.init)
+        switch response.actionIdentifier {
+        case "IDLE_WORK":
+            if let reviewID { await AppModel.shared.answerIdleReview(reviewID, as: .work) }
+        case "IDLE_AWAY":
+            if let reviewID { await AppModel.shared.answerIdleReview(reviewID, as: .away) }
+        case "IDLE_LATER", UNNotificationDefaultActionIdentifier:
+            if let id = reviewID {
+                center.removeDeliveredNotifications(withIdentifiers: ["idle-review-\(id)"])
+            }
+        default:
+            break
+        }
     }
 
     nonisolated func userNotificationCenter(_ center: UNUserNotificationCenter,
@@ -78,6 +93,7 @@ final class AppModel: ObservableObject {
     private var lastBreakActive = false
     private var didPromptNotificationSettings = false
     private let notificationHandler = NotificationHandler()
+    private var notifiedIdleReviewIDs = Set<Int64>()
 
     static func wallNow() -> Millis { Millis(Date().timeIntervalSince1970 * 1000) }
     private func stamp() -> Stamp { Stamp(wall: Self.wallNow(), mono: ProcessInfo.processInfo.systemUptime) }
@@ -252,6 +268,13 @@ final class AppModel: ObservableObject {
         today = calc.day(d, now: now)
         week = calc.week(containing: d, now: now)
         reviews = ledger.reviews(status: .pending)
+        for review in reviews where review.type == .idle {
+            guard let id = review.id, notifiedIdleReviewIDs.insert(id).inserted else { continue }
+            let duration = review.end.map { max(0, $0 - review.start) } ?? 0
+            notify(title: "Away or working?",
+                   body: "You were inactive for \(hm(duration)) during working hours. Choose Away or Work.",
+                   id: "idle-review-\(id)", category: "IDLE_REVIEW", userInfo: ["reviewID": String(id)])
+        }
         let activityDate = selectedActivityDate ?? d
         activityDay = activityDate == d ? today : calc.day(activityDate, now: now)
         do {
@@ -331,9 +354,15 @@ final class AppModel: ObservableObject {
         let category = UNNotificationCategory(identifier: "AFTER_HOURS",
                                               actions: [work, learn, privateTime, later],
                                               intentIdentifiers: [])
+        let idleWork = UNNotificationAction(identifier: "IDLE_WORK", title: "Work")
+        let idleAway = UNNotificationAction(identifier: "IDLE_AWAY", title: "Away")
+        let idleLater = UNNotificationAction(identifier: "IDLE_LATER", title: "Ask Later")
+        let idleCategory = UNNotificationCategory(identifier: "IDLE_REVIEW",
+                                                  actions: [idleWork, idleAway, idleLater],
+                                                  intentIdentifiers: [])
         let center = UNUserNotificationCenter.current()
         center.delegate = notificationHandler
-        center.setNotificationCategories([category])
+        center.setNotificationCategories([category, idleCategory])
     }
 
     func requestNotificationAuthorization() {
@@ -377,11 +406,13 @@ final class AppModel: ObservableObject {
         NSWorkspace.shared.open(url)
     }
 
-    func notify(title: String, body: String, id: String = UUID().uuidString, category: String? = nil) {
+    func notify(title: String, body: String, id: String = UUID().uuidString, category: String? = nil,
+                userInfo: [AnyHashable: Any] = [:]) {
         guard canNotify else { return }
         let c = UNMutableNotificationContent()
         c.title = title; c.body = body; c.sound = .default
         if let category { c.categoryIdentifier = category }
+        c.userInfo = userInfo
         UNUserNotificationCenter.current().add(UNNotificationRequest(identifier: id, content: c, trigger: nil)) { [weak self] error in
             guard let error else { return }
             let message = "Notification failed: \(error.localizedDescription)"
@@ -494,10 +525,20 @@ final class AppModel: ObservableObject {
                 try ReviewResolver(ledger: ledger).resolve(r, as: a, now: Self.wallNow())
             }
             refresh()
+            if r.type == .idle, let id = r.id {
+                UNUserNotificationCenter.current().removeDeliveredNotifications(withIdentifiers: ["idle-review-\(id)"])
+            }
         } catch {
             reviewError = "Could not save your answer: \(error.localizedDescription). Please try again."
             NSLog("%@", reviewError ?? "Could not save review")
         }
+    }
+
+    func answerIdleReview(_ id: Int64, as answer: ReviewAnswer) {
+        guard answer == .work || answer == .away,
+              let ledger,
+              let review = ledger.reviews(status: .pending).first(where: { $0.id == id && $0.type == .idle }) else { return }
+        resolve(review, as: answer)
     }
 
     func reclassify(_ span: Span, as c: WorkTimerCore.Category, note: String) {

@@ -1,12 +1,13 @@
 import Foundation
 
-public enum ReviewAnswer: String { case work, learn, breakTime, privateTime, later
+public enum ReviewAnswer: String { case work, learn, breakTime, privateTime, away, later
     var category: Category? {
         switch self {
         case .work: return .work
         case .learn: return .learn
         case .breakTime: return .breakTime
         case .privateTime: return .privateTime
+        case .away: return .away
         case .later: return nil
         }
     }
@@ -27,8 +28,17 @@ public struct ReviewResolver {
             for (span, answer) in pieces {
                 guard let cut = span.intersection(range) else { continue }
                 guard let cat = answer.category else { kept = true; continue }
-                guard review.type == .gap, cut == range else {
-                    throw SQLiteError.invalid("Answer the complete tracking gap. Other time can be corrected by five-minute block.")
+                switch review.type {
+                case .gap:
+                    guard cut == range, cat != .away else {
+                        throw SQLiteError.invalid("Answer the complete tracking gap. Other time can be corrected by five-minute block.")
+                    }
+                case .idle:
+                    guard cut == range, cat == .work || cat == .away else {
+                        throw SQLiteError.invalid("Choose Work or Away for this idle period.")
+                    }
+                case .outsideHours:
+                    throw SQLiteError.invalid("This review cannot be answered here.")
                 }
                 try ledger.addAdjustment(Adjustment(span: cut, category: cat, note: "Review answer", createdAt: now, reviewID: id))
             }
